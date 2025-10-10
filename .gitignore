@@ -13,7 +13,7 @@ develop-eggs/
 dist/
 downloads/
 eggs/
-.eggs/
+.eggs/ 
 lib64/
 parts/
 sdist/
@@ -158,4 +158,5 @@ data.json
 hub.json
 commands/relateddata/docs.json
 commands/relateddata/data.json
+projects.json
 projects.json
