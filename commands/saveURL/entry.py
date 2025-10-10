@@ -12,7 +12,7 @@ ui = app.userInterface
 # TODO *** Specify the command identity information. ***
 CMD_ID = f"{config.COMPANY_NAME}_{config.ADDIN_NAME}_saveClickUpURL"
 CMD_NAME = "Save ClickUp URL"
-CMD_Description = "Save a ClickUp URL for the current Fusion 360 project"
+CMD_Description = "Save a ClickUp URL for the current Fusion project"
 
 # Specify that the command will be promoted to the panel.
 IS_PROMOTED = False
@@ -93,7 +93,7 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     doc = app.activeDocument
     if not doc:
         ui.messageBox(
-            "No active document found. Please open a Fusion 360 document first.",
+            "No active document found. Please open a Fusion document first.",
             "No Document",
         )
         return
@@ -195,10 +195,10 @@ def command_execute(args: adsk.core.CommandEventArgs):
                 projects_data = json.load(f)
         except FileNotFoundError:
             # File doesn't exist, will be created
-            futil.log("Projects file not found, creating new one")
+            futil.log("Projects cache not found, creating new one")
         except json.JSONDecodeError:
             # File is corrupted, start fresh
-            futil.log("Projects file corrupted, creating new one")
+            futil.log("Projects cache corrupted, creating new one")
 
         # Ensure projects key exists
         if "projects" not in projects_data:
@@ -219,7 +219,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
         # Show success message
         action = "Updated" if project_exists else "Added"
-        ui.messageBox(f"{action} ClickUp URL for project: {project_name}", "Success")
+        #ui.messageBox(f"{action} ClickUp URL for project: {project_name}", "Success")
         futil.log(f"{action} ClickUp URL for project URN: {project_urn}")
 
     except Exception as e:
