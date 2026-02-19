@@ -14,15 +14,9 @@ CMD_ID = f"{config.COMPANY_NAME}_{config.ADDIN_NAME}_saveClickUpURL"
 CMD_NAME = "Save ClickUp URL"
 CMD_Description = "Save a ClickUp URL for the current Fusion project"
 
-# Specify that the command will be promoted to the panel.
-IS_PROMOTED = False
-WORKSPACE_ID = config.design_workspace
-TAB_ID = config.tools_tab_id
-TAB_NAME = config.my_tab_name
-
-PANEL_ID = config.my_panel_id
-PANEL_NAME = config.my_panel_name
-PANEL_AFTER = config.my_panel_after
+# QAT flyout (shared across PowerTools add-ins — create only if absent).
+PT_SETTINGS_ID = "PTSettings"
+PT_SETTINGS_NAME = "PowerTools Settings"
 
 # Resource location for command icons, here we assume a sub folder in this directory named "resources".
 ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "")
@@ -43,39 +37,41 @@ def start():
     futil.add_handler(cmd_def.commandCreated, command_created)
 
     # ******** Add a button into the UI so the user can run the command. ********
-    # Get the target workspace the button will be created in.
-    workspace = ui.workspaces.itemById(WORKSPACE_ID)
+    # Get the QAT toolbar.
+    qat = ui.toolbars.itemById("QAT")
 
-    # Get or create the tab
-    tab = workspace.toolbarTabs.itemById(TAB_ID)
-    if not tab:
-        tab = workspace.toolbarTabs.add(TAB_ID, TAB_NAME)
+    # Get the drop-down that contains the file related commands.
+    file_dropdown = adsk.core.DropDownControl.cast(qat.controls.itemById("FileSubMenuCommand"))
 
-    # Get or create the panel
-    panel = tab.toolbarPanels.itemById(PANEL_ID)
-    if not panel:
-        panel = tab.toolbarPanels.add(PANEL_ID, PANEL_NAME, PANEL_AFTER, False)
+    # Get or create the shared PowerTools Settings flyout.
+    # Other PowerTools add-ins may have already added this flyout.
+    pt_settings_control = file_dropdown.controls.itemById(PT_SETTINGS_ID)
+    if not pt_settings_control:
+        pt_settings = file_dropdown.controls.addDropDown(
+            PT_SETTINGS_NAME, "", PT_SETTINGS_ID
+        )
+    else:
+        pt_settings = adsk.core.DropDownControl.cast(pt_settings_control)
 
-    # Create the button command control in the UI
-    control = panel.controls.addCommand(cmd_def, "", False)
-
-    # Specify if the command is promoted to the main toolbar.
-    control.isPromoted = IS_PROMOTED
+    # Add the command into the flyout.
+    pt_settings.controls.addCommand(cmd_def)
 
 
 # Executed when add-in is stopped.
 def stop():
     # Get the various UI elements for this command
-    workspace = ui.workspaces.itemById(WORKSPACE_ID)
-    if workspace:
-        tab = workspace.toolbarTabs.itemById(TAB_ID)
-        if tab:
-            panel = tab.toolbarPanels.itemById(PANEL_ID)
-            if panel:
-                command_control = panel.controls.itemById(CMD_ID)
-                # Delete the button command control
-                if command_control:
-                    command_control.deleteMe()
+    qat = ui.toolbars.itemById("QAT")
+    file_dropdown = adsk.core.DropDownControl.cast(qat.controls.itemById("FileSubMenuCommand"))
+    pt_settings = adsk.core.DropDownControl.cast(file_dropdown.controls.itemById(PT_SETTINGS_ID))
+
+    if pt_settings:
+        command_control = pt_settings.controls.itemById(CMD_ID)
+        if command_control:
+            command_control.deleteMe()
+
+        # Only remove the flyout if no other add-in's commands remain.
+        if pt_settings.controls.count == 0:
+            pt_settings.deleteMe()
 
     # Delete the command definition
     command_definition = ui.commandDefinitions.itemById(CMD_ID)
