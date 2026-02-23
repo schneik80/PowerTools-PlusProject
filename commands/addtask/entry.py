@@ -38,6 +38,7 @@ CLICKUP_API_BASE = "https://api.clickup.com/api/v2"
 # Path to auth credentials in the shared cache folder
 CACHE_DIR = config.CACHE_DIR
 AUTH_JSON_PATH = os.path.join(CACHE_DIR, "auth.json")
+PROJECTS_JSON_PATH = os.path.join(CACHE_DIR, "projects.json")
 
 # Local list of event handlers used to maintain a reference so
 # they are not released and garbage collected.
@@ -93,6 +94,32 @@ def stop():
 def command_created(args: adsk.core.CommandCreatedEventArgs):
     """Called when the command button is clicked — builds the dialog."""
     futil.log(f"{CMD_NAME}: Command Created — building dialog inputs.")
+
+    # ------------------------------------------------------------------ #
+    # Pre-flight: confirm required cache files are present               #
+    # ------------------------------------------------------------------ #
+    missing = []
+    if not os.path.isfile(AUTH_JSON_PATH):
+        missing.append(f"  • {AUTH_JSON_PATH}")
+    if not os.path.isfile(PROJECTS_JSON_PATH):
+        missing.append(f"  • {PROJECTS_JSON_PATH}")
+
+    if missing:
+        missing_list = "\n".join(missing)
+        futil.log(f"{CMD_NAME}: Aborting — missing cache file(s):\n{missing_list}")
+        ui.messageBox(
+            "Required configuration files are missing:\n\n"
+            f"{missing_list}\n\n"
+            "To fix:\n"
+            "  1. Run 'Set Tokens' to save your ClickUp and TinyURL API tokens.\n"
+            "  2. Run 'Map Project' (or open a ClickUp link) to register the "
+            "current project.",
+            "Setup Required",
+        )
+        # Skip the dialog — set auto-execute so the command terminates immediately
+        # without opening the input form.
+        args.command.isAutoExecute = True
+        return
 
     inputs = args.command.commandInputs
 
