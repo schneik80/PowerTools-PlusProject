@@ -235,7 +235,7 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     # ------------------------------------------------------------------ #
     inputs.addTextBoxCommandInput(
         "all_tasks_header", "",
-        f"<b>All Tasks in List</b> ({len(all_tasks)})",
+        f"<b>Project Tasks</b> ({len(all_tasks)})",
         1, True,
     )
     _build_task_table(inputs, all_tasks, table_id="all_tasks_table", id_prefix="all")
