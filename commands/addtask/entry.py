@@ -299,14 +299,16 @@ def command_execute(args: adsk.core.CommandEventArgs):
         futil.log(f"{CMD_NAME}: Payload prepared — {list(payload.keys())}")
 
         # ------------------------------------------------------------------ #
-        # 3b. Inject document link custom field if TinyURL shortening worked #
+        # 3b. Inject document custom fields when "Link Document" is enabled  #
         # ------------------------------------------------------------------ #
+        custom_fields_list = []
+
         if short_url:
             futil.log(f"{CMD_NAME}: [TinyURL] Attaching short_url='{short_url}' to ClickUp custom field.")
             url_field_id = _get_url_custom_field_id(list_id, api_token)
             if url_field_id:
-                payload["custom_fields"] = [{"id": url_field_id, "value": short_url}]
-                futil.log(f"{CMD_NAME}: [TinyURL] custom_fields set — field_id='{url_field_id}'.")
+                custom_fields_list.append({"id": url_field_id, "value": short_url})
+                futil.log(f"{CMD_NAME}: [TinyURL] URL custom field queued — field_id='{url_field_id}'.")
             else:
                 futil.log(
                     f"{CMD_NAME}: [TinyURL] WARNING — 'Fusion Design' URL field not found on list '{list_id}'. "
@@ -315,8 +317,28 @@ def command_execute(args: adsk.core.CommandEventArgs):
         elif link_document:
             futil.log(
                 f"{CMD_NAME}: [TinyURL] WARNING — shortening failed or was skipped. "
-                f"No custom_fields added to payload.",
+                f"No URL custom field added to payload.",
             )
+
+        # Look up the 'Fusion Document URN' field ID now — value is written after task creation
+        # using the dedicated /task/{task_id}/field/{field_id} endpoint for reliability.
+        urn_field_id = None
+        doc_urn = None
+        if link_document and data_file:
+            doc_urn = data_file.id
+            futil.log(f"{CMD_NAME}: [URN] Document URN resolved: '{doc_urn}'")
+            urn_field_id = _get_urn_custom_field_id(list_id, api_token)
+            if urn_field_id:
+                futil.log(f"{CMD_NAME}: [URN] 'Fusion Document URN' field found — id='{urn_field_id}'. Will write after task creation.")
+            else:
+                futil.log(
+                    f"{CMD_NAME}: [URN] WARNING — 'Fusion Document URN' field not found on list '{list_id}'. "
+                    f"Document URN will not be attached.",
+                )
+
+        if custom_fields_list:
+            payload["custom_fields"] = custom_fields_list
+            futil.log(f"{CMD_NAME}: payload['custom_fields'] set with {len(custom_fields_list)} field(s).")
 
         # ------------------------------------------------------------------ #
         # 4. POST to ClickUp API using adsk.core.HttpRequest (Fusion native) #
@@ -344,7 +366,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
         # ------------------------------------------------------------------ #
         if 200 <= status_code < 300:
             task = json.loads(response.data)
-            task_id = task.get("id", "—")
+            task_id = task.get("id", "")
             task_url = task.get("url", "—")
             task_status = task.get("status", {}).get("status", "—")
 
@@ -352,6 +374,20 @@ def command_execute(args: adsk.core.CommandEventArgs):
             futil.log(f"{CMD_NAME}:   Task ID  = {task_id}")
             futil.log(f"{CMD_NAME}:   Task URL = {task_url}")
             futil.log(f"{CMD_NAME}:   Status   = {task_status}")
+
+            # ------------------------------------------------------------------ #
+            # 5b. Write Fusion Document URN to custom field via dedicated API    #
+            # POST /api/v2/task/{task_id}/field/{field_id}                       #
+            # This is more reliable than inline custom_fields on task creation   #
+            # for text-type fields.                                              #
+            # ------------------------------------------------------------------ #
+            if urn_field_id and doc_urn and task_id:
+                futil.log(f"{CMD_NAME}: [URN] Setting 'Fusion Document URN' on task '{task_id}'.")
+                urn_ok = _set_task_custom_field(task_id, urn_field_id, doc_urn, api_token)
+                if urn_ok:
+                    futil.log(f"{CMD_NAME}: [URN] 'Fusion Document URN' written successfully.")
+                else:
+                    futil.log(f"{CMD_NAME}: [URN] WARNING — failed to write 'Fusion Document URN' field.")
 
             ui.messageBox(
                 f"Task <b>{task_name}</b> created.<br>"
@@ -579,6 +615,105 @@ def _get_url_custom_field_id(list_id: str, api_token: str) -> str:
 
     except Exception as exc:
         futil.log(f"{CMD_NAME}: _get_url_custom_field_id — exception: {exc}")
+        return ""
+
+
+def _set_task_custom_field(task_id: str, field_id: str, value: str, api_token: str) -> bool:
+    """Set a custom field value on an existing task via the dedicated ClickUp endpoint.
+
+    Using this endpoint (rather than inline ``custom_fields`` on task creation) is
+    the most reliable approach for all field types, including ``short_text`` and
+    ``text``.
+
+    API reference: POST /api/v2/task/{task_id}/field/{field_id}
+    Body: ``{"value": "<value>"}``
+
+    Returns ``True`` on success, ``False`` otherwise.
+    """
+    futil.log(
+        f"{CMD_NAME}: _set_task_custom_field — task='{task_id}' field='{field_id}' "
+        f"value='{value[:80]}{'...' if len(value) > 80 else ''}'"
+    )
+
+    url = f"{CLICKUP_API_BASE}/task/{task_id}/field/{field_id}"
+    body = json.dumps({"value": value})
+
+    try:
+        req = adsk.core.HttpRequest.create(url, adsk.core.HttpMethods.PostMethod)
+        req.setHeader("Authorization", api_token)
+        req.setHeader("Content-Type", "application/json")
+        req.setHeader("Accept", "application/json")
+        req.data = body
+
+        response = req.executeSync()
+        status = response.statusCode
+        futil.log(f"{CMD_NAME}: _set_task_custom_field — status {status}")
+
+        if 200 <= status < 300:
+            return True
+
+        futil.log(f"{CMD_NAME}: _set_task_custom_field — FAILED: {response.data}")
+        return False
+
+    except Exception as exc:
+        futil.log(f"{CMD_NAME}: _set_task_custom_field — exception: {exc}")
+        return False
+
+
+def _get_urn_custom_field_id(list_id: str, api_token: str) -> str:
+    """Query the ClickUp list for its custom fields and return the ID of the
+    field named ``'Fusion Document URN'``.
+
+    Matches any field type so the ClickUp field can be ``short_text``, ``text``, etc.
+    Returns an empty string when the field is not found or if the request fails.
+
+    API reference: GET /api/v2/list/{list_id}/field
+    """
+    futil.log(f"{CMD_NAME}: _get_urn_custom_field_id — querying list '{list_id}'")
+
+    TARGET_NAME = "Fusion Document URN"
+
+    fields_url = f"{CLICKUP_API_BASE}/list/{list_id}/field"
+
+    try:
+        req = adsk.core.HttpRequest.create(fields_url, adsk.core.HttpMethods.GetMethod)
+        req.setHeader("Authorization", api_token)
+        req.setHeader("Accept", "application/json")
+
+        response = req.executeSync()
+        status = response.statusCode
+        futil.log(f"{CMD_NAME}: _get_urn_custom_field_id — status {status}")
+
+        if not (200 <= status < 300):
+            futil.log(
+                f"{CMD_NAME}: _get_urn_custom_field_id — non-2xx response: {response.data}",
+            )
+            return ""
+
+        fields_data = json.loads(response.data)
+        all_fields = fields_data.get("fields", [])
+
+        matched = next(
+            (f for f in all_fields if f.get("name") == TARGET_NAME),
+            None,
+        )
+
+        if matched:
+            field_id = matched.get("id", "")
+            futil.log(
+                f"{CMD_NAME}: _get_urn_custom_field_id — found '{TARGET_NAME}' "
+                f"(type='{matched.get('type')}') id='{field_id}'",
+            )
+            return field_id
+
+        futil.log(
+            f"{CMD_NAME}: _get_urn_custom_field_id — '{TARGET_NAME}' field not found on "
+            f"list '{list_id}'. Add a text custom field named '{TARGET_NAME}' in ClickUp.",
+        )
+        return ""
+
+    except Exception as exc:
+        futil.log(f"{CMD_NAME}: _get_urn_custom_field_id — exception: {exc}")
         return ""
 
 
