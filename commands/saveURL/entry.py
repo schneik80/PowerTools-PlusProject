@@ -11,8 +11,8 @@ ui = app.userInterface
 
 # TODO *** Specify the command identity information. ***
 CMD_ID = f"{config.COMPANY_NAME}_{config.ADDIN_NAME}_saveClickUpURL"
-CMD_NAME = "Save ClickUp URL"
-CMD_Description = "Save a ClickUp URL for the current Fusion project"
+CMD_NAME = "Map Project to ClickUp"
+CMD_Description = "Map the current Fusion project to a ClickUp list"
 
 # QAT flyout (shared across PowerTools add-ins — create only if absent).
 PT_SETTINGS_ID = "PTSettings"
@@ -117,15 +117,16 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     project_name = project.name
     project_urn = project.id
 
-    # Load existing ClickUp URL if available
+    # Load existing values if available
     existing_clickup_url = ""
+    existing_list_id = ""
     try:
         with open(config.PROJECTS_JSON_PATH, "r") as f:
             projects_data = json.load(f)
             if "projects" in projects_data and project_urn in projects_data["projects"]:
-                existing_clickup_url = projects_data["projects"][project_urn].get(
-                    "clickup_url", ""
-                )
+                entry = projects_data["projects"][project_urn]
+                existing_clickup_url = entry.get("clickup_url", "")
+                existing_list_id = entry.get("clickup_list_id", "")
     except (FileNotFoundError, json.JSONDecodeError):
         # File doesn't exist or is invalid, we'll create it when saving
         pass
@@ -146,6 +147,13 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     # ClickUp URL input
     clickup_url_input = inputs.addStringValueInput(
         "clickup_url", "ClickUp URL:", existing_clickup_url
+    )
+
+    # ClickUp List ID input
+    # Find the list ID in ClickUp: navigate into a List (not a Folder) and
+    # copy the number after /li/ in the URL.
+    inputs.addStringValueInput(
+        "clickup_list_id", "ClickUp List ID:", existing_list_id
     )
 
     # Connect to the events
@@ -174,10 +182,13 @@ def command_execute(args: adsk.core.CommandEventArgs):
         project_urn_input = inputs.itemById("project_urn")
         clickup_url_input = inputs.itemById("clickup_url")
 
+        list_id_input = inputs.itemById("clickup_list_id")
+
         # Access properties using getattr to avoid type checking issues
         project_name = getattr(project_name_input, "text", "")
         project_urn = getattr(project_urn_input, "text", "")
         clickup_url = getattr(clickup_url_input, "value", "").strip()
+        clickup_list_id = getattr(list_id_input, "value", "").strip()
 
         # Validate ClickUp URL
         if not clickup_url:
@@ -203,11 +214,14 @@ def command_execute(args: adsk.core.CommandEventArgs):
         # Check if project already exists
         project_exists = project_urn in projects_data["projects"]
 
-        # Update or add the project
-        projects_data["projects"][project_urn] = {
+        # Update or add the project — preserve any unrelated existing fields
+        existing = projects_data["projects"].get(project_urn, {})
+        existing.update({
             "project_name": project_name,
             "clickup_url": clickup_url,
-        }
+            "clickup_list_id": clickup_list_id,
+        })
+        projects_data["projects"][project_urn] = existing
 
         # Save the updated data
         with open(config.PROJECTS_JSON_PATH, "w") as f:

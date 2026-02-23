@@ -1,8 +1,10 @@
 from .saveURL import entry as commandDialog
 from .openClickUp import entry as openClickUp
+from .addtask import entry as addTask
+from .setTokens import entry as setTokens
 
 # Fusion will automatically call the start() and stop() functions.
-commands = [commandDialog, openClickUp]
+commands = [commandDialog, openClickUp, addTask, setTokens]
 
 
 # Assumes you defined a "start" function in each of your modules.

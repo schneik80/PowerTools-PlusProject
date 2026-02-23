@@ -13,7 +13,7 @@ ui = app.userInterface
 CMD_ID = f"{config.COMPANY_NAME}_{config.ADDIN_NAME}_openClickUp"
 CMD_NAME = "Open ClickUp"
 CMD_Description = (
-    "Open the ClickUp project associated with the current Fusion 360 document"
+    "Open the ClickUp project associated with the current Fusion document"
 )
 
 # Specify that the command will be promoted to the panel
@@ -110,7 +110,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
         # Get the data file (this contains the project information)
         data_file = doc.dataFile
         if not data_file:
-            ui.messageBox("Unable to access document data file.", "Error")
+            ui.messageBox("Please open a saved Fusion document in a project mapped to Clickup.", "Error")
             return
 
         # Get the project that contains this document
@@ -129,22 +129,22 @@ def command_execute(args: adsk.core.CommandEventArgs):
                 projects_data = json.load(f)
         except FileNotFoundError:
             ui.messageBox(
-                f"Projects configuration file not found at: {config.PROJECTS_JSON_PATH}",
-                "Configuration Error",
+                f"Project mapping not found at: {config.PROJECTS_JSON_PATH}",
+                "Project Mapping Error",
             )
             return
         except json.JSONDecodeError:
             ui.messageBox(
-                "Invalid JSON format in projects configuration file.",
-                "Configuration Error",
+                "Invalid JSON format in project mapping.",
+                "Project Mapping Error",
             )
             return
 
         # Look up the project URN in the JSON data
         if "projects" not in projects_data:
             ui.messageBox(
-                'Invalid projects configuration: missing "projects" key.',
-                "Configuration Error",
+                'Invalid project mapping: missing "projects" key.',
+                "Project Mapping Error",
             )
             return
 
@@ -157,7 +157,8 @@ def command_execute(args: adsk.core.CommandEventArgs):
                 # Open the ClickUp URL in the default web browser
                 webbrowser.open(clickup_url)
                 futil.log(f"Opened ClickUp URL: {clickup_url}")
-                ui.messageBox(f"Opened ClickUp project: {project_name}", "Success")
+                # Show a message box confirming the project was opened (optional)
+                # ui.messageBox(f"Opened ClickUp project: {project_name}", "Success")
             else:
                 ui.messageBox(
                     f"No ClickUp URL configured for project: {project_name}",

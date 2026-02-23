@@ -158,5 +158,6 @@ data.json
 hub.json
 commands/relateddata/docs.json
 commands/relateddata/data.json
-projects.json
-projects.json
+# ClickUp cache — contains credentials and personal project data, never commit
+cache/auth.json
+cache/projects.json
