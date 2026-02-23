@@ -175,10 +175,24 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
         args.command.isAutoExecute = True
         return
 
-    tasks = _fetch_tasks_for_urn(list_id, urn_field_id, doc_urn, api_token)
-    futil.log(f"{CMD_NAME}: {len(tasks)} task(s) found for this document.")
+    # Fetch both task sets
+    doc_tasks_raw = _fetch_tasks_for_urn(list_id, urn_field_id, doc_urn, api_token)
+    all_tasks     = _fetch_all_tasks(list_id, api_token)
 
-    # Sort by priority ascending (Urgent=1 first, then High, Normal, Low, unset last)
+    # The ClickUp API text-field filter can return partial/fuzzy matches.
+    # Apply a strict client-side exact-match on the custom field value.
+    def _urn_matches(task: dict) -> bool:
+        for cf in task.get("custom_fields", []):
+            if cf.get("id") == urn_field_id:
+                return cf.get("value", "") == doc_urn
+        return False
+
+    doc_tasks = [t for t in doc_tasks_raw if _urn_matches(t)]
+    futil.log(
+        f"{CMD_NAME}: {len(doc_tasks_raw)} API result(s) → {len(doc_tasks)} "
+        f"exact URN match(es); {len(all_tasks)} total in list."
+    )
+
     def _priority_sort_key(task):
         raw = task.get("priority") or {}
         try:
@@ -186,97 +200,45 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
         except (ValueError, TypeError):
             return 99
 
-    tasks.sort(key=_priority_sort_key)
+    doc_tasks.sort(key=_priority_sort_key)
+    all_tasks.sort(key=_priority_sort_key)
 
     # ------------------------------------------------------------------ #
     # Build dialog inputs                                                 #
     # ------------------------------------------------------------------ #
     inputs = args.command.commandInputs
 
-    # Info bar: document name
-    info_text = (
-        f"<b>Document:</b> {doc_name}<br>"
-        f"<b>Tasks linked to this document:</b> {len(tasks)}"
-    )
-    inputs.addTextBoxCommandInput("info", "", info_text, 2, True)
-
-    # Open List button — rendered as a clickable HTML link
+    # Info bar: document name + open list link
     if _list_url:
-        open_btn = inputs.addTextBoxCommandInput(
-            "open_list",
-            "",
-            f'<a href="{_list_url}">🔗 Open List in ClickUp</a>',
-            1,
-            True,
-        )
+        list_link = f'<a href="{_list_url}">🔗 Open List in ClickUp</a>'
     else:
-        open_btn = inputs.addTextBoxCommandInput(
-            "open_list", "", "(No list URL configured)", 1, True
-        )
+        list_link = "(No list URL configured)"
+
+    inputs.addTextBoxCommandInput(
+        "info", "",
+        f"<b>Document:</b> {doc_name}<br>{list_link}",
+        2, True,
+    )
 
     # ------------------------------------------------------------------ #
-    # Task table: Name | Priority | Status                                #
-    # Column width ratios: 5 : 2 : 2                                     #
+    # Table 1 — tasks linked to this document                            #
     # ------------------------------------------------------------------ #
-    table = inputs.addTableCommandInput("tasks_table", "Tasks", 3, "5:2:2")
-    table.hasGrid = True
-    table.minimumVisibleRows = 3
-    table.maximumVisibleRows = 20
+    inputs.addTextBoxCommandInput(
+        "doc_tasks_header", "",
+        f"<b>Tasks Linked to This Document</b> ({len(doc_tasks)})",
+        1, True,
+    )
+    _build_task_table(inputs, doc_tasks, table_id="doc_tasks_table", id_prefix="doc")
 
-    # Header row
-    def _add_header(input_id: str, label: str) -> adsk.core.StringValueCommandInput:
-        h = inputs.addStringValueInput(input_id, "", label)
-        h.isReadOnly = True
-        return h
-
-    table.addCommandInput(_add_header("h_name",     "Task Name"),  0, 0)
-    table.addCommandInput(_add_header("h_priority", "Priority"),   0, 1)
-    table.addCommandInput(_add_header("h_status",   "Status"),     0, 2)
-
-    if not tasks:
-        empty = inputs.addTextBoxCommandInput(
-            "no_tasks", "", "No tasks found for this document.", 1, True
-        )
-        table.addCommandInput(empty, 1, 0, 0, 3)  # span all 3 columns
-    else:
-        for i, task in enumerate(tasks, start=1):
-            row = i  # row 0 is header
-
-            task_name = task.get("name", "(unnamed)")
-            task_url  = task.get("url", "")
-            priority_id = None
-            raw_priority = task.get("priority")
-            if raw_priority and raw_priority.get("id"):
-                try:
-                    priority_id = int(raw_priority["id"])
-                except (ValueError, TypeError):
-                    pass
-            priority_label = _PRIORITY_LABEL.get(priority_id, "—")
-            status = task.get("status", {}).get("status", "—").title()
-
-            # Name cell — clickable HTML hyperlink
-            if task_url:
-                name_html = f'<a href="{task_url}">{task_name}</a>'
-            else:
-                name_html = task_name
-
-            name_cell = inputs.addTextBoxCommandInput(
-                f"name_{row}", "", name_html, 1, True
-            )
-
-            priority_cell = inputs.addStringValueInput(
-                f"priority_{row}", "", priority_label
-            )
-            priority_cell.isReadOnly = True
-
-            status_cell = inputs.addStringValueInput(
-                f"status_{row}", "", status
-            )
-            status_cell.isReadOnly = True
-
-            table.addCommandInput(name_cell,     row, 0)
-            table.addCommandInput(priority_cell, row, 1)
-            table.addCommandInput(status_cell,   row, 2)
+    # ------------------------------------------------------------------ #
+    # Table 2 — all tasks in the list                                    #
+    # ------------------------------------------------------------------ #
+    inputs.addTextBoxCommandInput(
+        "all_tasks_header", "",
+        f"<b>All Tasks in List</b> ({len(all_tasks)})",
+        1, True,
+    )
+    _build_task_table(inputs, all_tasks, table_id="all_tasks_table", id_prefix="all")
 
     # Connect events
     futil.add_handler(
@@ -285,6 +247,78 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     futil.add_handler(
         args.command.destroy, command_destroy, local_handlers=local_handlers
     )
+
+
+def _build_task_table(
+    inputs: adsk.core.CommandInputs,
+    tasks: list,
+    table_id: str,
+    id_prefix: str,
+) -> adsk.core.TableCommandInput:
+    """Add a Name | Priority | Status table to *inputs* and populate it.
+
+    *id_prefix* is used to namespace all child input IDs so two tables on
+    the same dialog never share an ID.
+    """
+    table = inputs.addTableCommandInput(table_id, "", 3, "5:2:2")
+    table.hasGrid = True
+    table.minimumVisibleRows = 3
+    table.maximumVisibleRows = 15
+
+    # Header row
+    for col_id, label in [
+        (f"{id_prefix}_h_name",     "Task Name"),
+        (f"{id_prefix}_h_priority", "Priority"),
+        (f"{id_prefix}_h_status",   "Status"),
+    ]:
+        h = inputs.addStringValueInput(col_id, "", label)
+        h.isReadOnly = True
+
+    table.addCommandInput(inputs.itemById(f"{id_prefix}_h_name"),     0, 0)
+    table.addCommandInput(inputs.itemById(f"{id_prefix}_h_priority"), 0, 1)
+    table.addCommandInput(inputs.itemById(f"{id_prefix}_h_status"),   0, 2)
+
+    if not tasks:
+        empty = inputs.addTextBoxCommandInput(
+            f"{id_prefix}_empty", "", "No tasks found.", 1, True
+        )
+        table.addCommandInput(empty, 1, 0, 0, 3)
+        return table
+
+    for i, task in enumerate(tasks, start=1):
+        task_name = task.get("name", "(unnamed)")
+        task_url  = task.get("url", "")
+
+        priority_id = None
+        raw_priority = task.get("priority")
+        if raw_priority and raw_priority.get("id"):
+            try:
+                priority_id = int(raw_priority["id"])
+            except (ValueError, TypeError):
+                pass
+        priority_label = _PRIORITY_LABEL.get(priority_id, "—")
+        status = task.get("status", {}).get("status", "—").title()
+
+        name_html = f'<a href="{task_url}">{task_name}</a>' if task_url else task_name
+        name_cell = inputs.addTextBoxCommandInput(
+            f"{id_prefix}_name_{i}", "", name_html, 1, True
+        )
+
+        priority_cell = inputs.addStringValueInput(
+            f"{id_prefix}_priority_{i}", "", priority_label
+        )
+        priority_cell.isReadOnly = True
+
+        status_cell = inputs.addStringValueInput(
+            f"{id_prefix}_status_{i}", "", status
+        )
+        status_cell.isReadOnly = True
+
+        table.addCommandInput(name_cell,     i, 0)
+        table.addCommandInput(priority_cell, i, 1)
+        table.addCommandInput(status_cell,   i, 2)
+
+    return table
 
 
 def command_execute(args: adsk.core.CommandEventArgs):
@@ -374,11 +408,8 @@ def _fetch_tasks_for_urn(
 ) -> list:
     """Query GET /api/v2/list/{list_id}/task filtered by the Fusion Document URN field.
 
-    Returns a list of raw ClickUp task dicts. Results are limited to 100 tasks
-    (page 0). The caller is responsible for sorting.
-
+    Returns a list of raw ClickUp task dicts (page 0, up to 100).
     API docs: https://developer.clickup.com/reference/gettasks
-    Custom field filter: ?custom_field=[{"field_id":"...","operator":"=","value":"..."}]
     """
     import urllib.parse
 
@@ -396,15 +427,38 @@ def _fetch_tasks_for_urn(
         req.setHeader("Authorization", api_token)
         req.setHeader("Accept", "application/json")
         response = req.executeSync()
-
         futil.log(f"{CMD_NAME}: _fetch_tasks_for_urn — HTTP {response.statusCode}")
-
         if not (200 <= response.statusCode < 300):
             futil.log(f"{CMD_NAME}: _fetch_tasks_for_urn — error body: {response.data}")
             return []
-
         return json.loads(response.data).get("tasks", [])
-
     except Exception as exc:
         futil.log(f"{CMD_NAME}: _fetch_tasks_for_urn — exception: {exc}")
+        return []
+
+
+def _fetch_all_tasks(list_id: str, api_token: str) -> list:
+    """Fetch all tasks from the list (no custom-field filter), including closed.
+
+    Returns a list of raw ClickUp task dicts (page 0, up to 100).
+    API docs: https://developer.clickup.com/reference/gettasks
+    """
+    import urllib.parse
+
+    params = urllib.parse.urlencode({"page": 0, "include_closed": "true"})
+    url = f"{CLICKUP_API_BASE}/list/{list_id}/task?{params}"
+    futil.log(f"{CMD_NAME}: _fetch_all_tasks — GET '{url}'")
+
+    try:
+        req = adsk.core.HttpRequest.create(url, adsk.core.HttpMethods.GetMethod)
+        req.setHeader("Authorization", api_token)
+        req.setHeader("Accept", "application/json")
+        response = req.executeSync()
+        futil.log(f"{CMD_NAME}: _fetch_all_tasks — HTTP {response.statusCode}")
+        if not (200 <= response.statusCode < 300):
+            futil.log(f"{CMD_NAME}: _fetch_all_tasks — error body: {response.data}")
+            return []
+        return json.loads(response.data).get("tasks", [])
+    except Exception as exc:
+        futil.log(f"{CMD_NAME}: _fetch_all_tasks — exception: {exc}")
         return []
