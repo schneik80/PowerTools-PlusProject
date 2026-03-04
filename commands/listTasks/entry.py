@@ -35,14 +35,21 @@ CACHE_DIR = config.CACHE_DIR
 AUTH_JSON_PATH = os.path.join(CACHE_DIR, "auth.json")
 PROJECTS_JSON_PATH = os.path.join(CACHE_DIR, "projects.json")
 
-# Priority mapping: ClickUp integer → display label
-_PRIORITY_LABEL = {1: "🔴 Urgent", 2: "🟠 High", 3: "🔵 Normal", 4: "⚪ Low"}
+# Priority constants
 _PRIORITY_SORT_KEY = {1: 0, 2: 1, 3: 2, 4: 3}
+_PRIORITY_OPTIONS = ["Urgent", "High", "Normal", "Low"]
+_PRIORITY_LABEL_TO_INT = {"Urgent": 1, "High": 2, "Normal": 3, "Low": 4}
+_PRIORITY_INT_TO_LABEL = {v: k for k, v in _PRIORITY_LABEL_TO_INT.items()}
 
 local_handlers = []
 
-# Module-level state shared between command_created and command_input_changed
+# Module-level state shared between command_created and command_execute
 _list_url: str = ""
+_api_token: str = ""
+_list_statuses: list = []  # [{"status": str, "color": str, ...}, ...] from ClickUp API
+_task_originals: dict = (
+    {}
+)  # "{id_prefix}_{task_id}" → {"status": str, "priority": int|None}
 
 
 def start():
@@ -85,8 +92,11 @@ def stop():
 
 def command_created(args: adsk.core.CommandCreatedEventArgs):
     """Builds the task-list dialog."""
-    global _list_url
+    global _list_url, _api_token, _list_statuses, _task_originals
     _list_url = ""
+    _api_token = ""
+    _list_statuses = []
+    _task_originals = {}
 
     futil.log(f"{CMD_NAME}: Command Created — building task list dialog.")
 
@@ -150,8 +160,8 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     _list_url = _load_clickup_url_for_project(project_urn)
     futil.log(f"{CMD_NAME}: list_id='{list_id}'  list_url='{_list_url}'")
 
-    api_token = _load_api_token()
-    if not api_token:
+    _api_token = _load_api_token()
+    if not _api_token:
         ui.messageBox(
             f"ClickUp API token not found.\n\nPlease run 'Set Tokens'.",
             "Authentication Error",
@@ -159,10 +169,16 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
         args.command.isAutoExecute = True
         return
 
+    # Fetch available statuses for the list (populates the status dropdowns)
+    _list_statuses = _fetch_list_statuses(list_id, _api_token)
+    futil.log(
+        f"{CMD_NAME}: fetched {len(_list_statuses)} status(es) for list '{list_id}'."
+    )
+
     # ------------------------------------------------------------------ #
     # Fetch tasks filtered by the Fusion Document URN custom field        #
     # ------------------------------------------------------------------ #
-    urn_field_id = _get_urn_custom_field_id(list_id, api_token)
+    urn_field_id = _get_urn_custom_field_id(list_id, _api_token)
     if not urn_field_id:
         ui.messageBox(
             "The 'Fusion Document URN' custom field was not found on this ClickUp list.\n\n"
@@ -174,8 +190,8 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
         return
 
     # Fetch both task sets
-    doc_tasks_raw = _fetch_tasks_for_urn(list_id, urn_field_id, doc_urn, api_token)
-    all_tasks = _fetch_all_tasks(list_id, api_token)
+    doc_tasks_raw = _fetch_tasks_for_urn(list_id, urn_field_id, doc_urn, _api_token)
+    all_tasks = _fetch_all_tasks(list_id, _api_token)
 
     # The ClickUp API text-field filter can return partial/fuzzy matches.
     # Apply a strict client-side exact-match on the custom field value.
@@ -230,7 +246,14 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
         1,
         True,
     )
-    _build_task_table(inputs, doc_tasks, table_id="doc_tasks_table", id_prefix="doc")
+    _build_task_table(
+        inputs,
+        doc_tasks,
+        table_id="doc_tasks_table",
+        id_prefix="doc",
+        status_options=_list_statuses,
+        task_originals=_task_originals,
+    )
 
     # ------------------------------------------------------------------ #
     # Table 2 — all tasks in the list                                    #
@@ -242,12 +265,16 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
         1,
         True,
     )
-    _build_task_table(inputs, all_tasks, table_id="all_tasks_table", id_prefix="all")
+    _build_task_table(
+        inputs,
+        all_tasks,
+        table_id="all_tasks_table",
+        id_prefix="all",
+        status_options=_list_statuses,
+        task_originals=_task_originals,
+    )
 
     # Connect events
-    # isExecutedWhenPreEmpted makes Cancel/Escape behave the same as OK
-    # since this is a read-only dialog with nothing to cancel.
-    args.command.isExecutedWhenPreEmpted = True
     futil.add_handler(
         args.command.execute, command_execute, local_handlers=local_handlers
     )
@@ -261,12 +288,21 @@ def _build_task_table(
     tasks: list,
     table_id: str,
     id_prefix: str,
+    status_options: list = None,
+    task_originals: dict = None,
 ) -> adsk.core.TableCommandInput:
     """Add a Name | Priority | Status table to *inputs* and populate it.
 
     *id_prefix* is used to namespace all child input IDs so two tables on
     the same dialog never share an ID.
+    *status_options* is the list of status dicts fetched from the ClickUp API.
+    If provided, Status is rendered as an editable dropdown; otherwise read-only.
+    *task_originals* dict is populated with "{id_prefix}_{task_id}" → original
+    status string so command_execute can detect and PATCH changes.
     """
+    if status_options is None:
+        status_options = []
+
     table = inputs.addTableCommandInput(table_id, "", 3, "5:2:2")
     table.hasGrid = True
     table.minimumVisibleRows = 3
@@ -293,6 +329,7 @@ def _build_task_table(
         return table
 
     for i, task in enumerate(tasks, start=1):
+        tid = task.get("id", f"unknown_{i}")
         task_name = task.get("name", "(unnamed)")
         task_url = task.get("url", "")
 
@@ -303,21 +340,56 @@ def _build_task_table(
                 priority_id = int(raw_priority["id"])
             except (ValueError, TypeError):
                 pass
-        priority_label = _PRIORITY_LABEL.get(priority_id, "—")
-        status = task.get("status", {}).get("status", "—").title()
+
+        status_str = task.get("status", {}).get("status", "").lower()
+        if task_originals is not None:
+            task_originals[f"{id_prefix}_{tid}"] = {
+                "status": status_str,
+                "priority": priority_id,
+            }
 
         name_html = f'<a href="{task_url}">{task_name}</a>' if task_url else task_name
         name_cell = inputs.addTextBoxCommandInput(
             f"{id_prefix}_name_{i}", "", name_html, 1, True
         )
 
-        priority_cell = inputs.addStringValueInput(
-            f"{id_prefix}_priority_{i}", "", priority_label
+        # Priority cell — editable dropdown
+        pri_label_plain = _PRIORITY_INT_TO_LABEL.get(priority_id, "Normal")
+        priority_cell = inputs.addDropDownCommandInput(
+            f"{id_prefix}_priority_{tid}",
+            "",
+            adsk.core.DropDownStyles.TextListDropDownStyle,
         )
-        priority_cell.isReadOnly = True
+        priority_cell.tooltip = "Priority"
+        priority_cell.tooltipDescription = "Set the ClickUp task priority."
+        for opt in _PRIORITY_OPTIONS:
+            priority_cell.listItems.add(opt, opt == pri_label_plain)
 
-        status_cell = inputs.addStringValueInput(f"{id_prefix}_status_{i}", "", status)
-        status_cell.isReadOnly = True
+        # Status cell — dropdown if we have API-sourced options, else read-only string
+        if status_options:
+            status_cell = inputs.addDropDownCommandInput(
+                f"{id_prefix}_status_{tid}",
+                "",
+                adsk.core.DropDownStyles.TextListDropDownStyle,
+            )
+            status_cell.tooltip = "Status"
+            status_cell.tooltipDescription = "Set the ClickUp task status."
+            matched = False
+            for opt in status_options:
+                opt_name = opt.get("status", "")
+                is_selected = opt_name.lower() == status_str
+                status_cell.listItems.add(opt_name.title(), is_selected)
+                if is_selected:
+                    matched = True
+            if not matched and status_cell.listItems.count > 0:
+                status_cell.listItems.item(0).isSelected = True
+        else:
+            status_cell = inputs.addStringValueInput(
+                f"{id_prefix}_status_{tid}", "", status_str.title() or "—"
+            )
+            status_cell.isReadOnly = True
+            status_cell.tooltip = "Status"
+            status_cell.tooltipDescription = "Status could not be fetched from ClickUp."
 
         table.addCommandInput(name_cell, i, 0)
         table.addCommandInput(priority_cell, i, 1)
@@ -327,8 +399,59 @@ def _build_task_table(
 
 
 def command_execute(args: adsk.core.CommandEventArgs):
-    """OK was clicked — nothing to persist, dialog just closes."""
-    futil.log(f"{CMD_NAME}: Dialog closed.")
+    """OK was clicked — PATCH any changed priority or status fields to ClickUp."""
+    futil.log(f"{CMD_NAME}: Execute — scanning for changed fields.")
+
+    inputs = args.command.commandInputs
+    updated = 0
+    errors = 0
+
+    for key, original in _task_originals.items():
+        # key is "{id_prefix}_{task_id}"
+        prefix, task_id = key.split("_", 1)
+
+        payload: dict = {}
+
+        # ---- Priority ----
+        pri_input = inputs.itemById(f"{prefix}_priority_{task_id}")
+        if pri_input and hasattr(pri_input, "selectedItem") and pri_input.selectedItem:
+            new_pri_label = pri_input.selectedItem.name
+            new_pri_int = _PRIORITY_LABEL_TO_INT.get(new_pri_label, 3)
+            if new_pri_int != original.get("priority"):
+                payload["priority"] = new_pri_int
+                futil.log(
+                    f"{CMD_NAME}: [{task_id}] priority changed → {new_pri_int} ({new_pri_label})"
+                )
+
+        # ---- Status ----
+        status_input = inputs.itemById(f"{prefix}_status_{task_id}")
+        if status_input is not None:
+            if hasattr(status_input, "selectedItem") and status_input.selectedItem:
+                new_status = status_input.selectedItem.name.lower()
+            else:
+                new_status = getattr(status_input, "value", "").lower()
+            if new_status and new_status != original.get("status", ""):
+                payload["status"] = new_status
+                futil.log(f"{CMD_NAME}: [{task_id}] status changed → '{new_status}'")
+
+        if not payload:
+            continue
+
+        ok = _patch_task(task_id, payload, _api_token)
+        if ok:
+            updated += 1
+        else:
+            errors += 1
+
+    if updated == 0 and errors == 0:
+        futil.log(f"{CMD_NAME}: No changes — dialog closed.")
+    elif errors == 0:
+        ui.messageBox(f"{updated} task(s) updated successfully.", CMD_NAME)
+    else:
+        ui.messageBox(
+            f"{updated} task(s) updated, {errors} failed.\n\nCheck the add-in log for details.",
+            CMD_NAME,
+        )
 
 
 def command_destroy(args: adsk.core.CommandEventArgs):
@@ -341,6 +464,57 @@ def command_destroy(args: adsk.core.CommandEventArgs):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _patch_task(task_id: str, payload: dict, api_token: str) -> bool:
+    """PATCH /api/v2/task/{task_id} with *payload*. Returns True on success."""
+    import json as _json
+
+    url = f"{CLICKUP_API_BASE}/task/{task_id}"
+    body = _json.dumps(payload)
+    futil.log(f"{CMD_NAME}: _patch_task — PATCH '{url}' body={body}")
+    try:
+        req = adsk.core.HttpRequest.create(url, adsk.core.HttpMethods.PutMethod)
+        req.setHeader("Authorization", api_token)
+        req.setHeader("Content-Type", "application/json")
+        req.setHeader("Accept", "application/json")
+        req.data = body
+        response = req.executeSync()
+        futil.log(f"{CMD_NAME}: _patch_task [{task_id}] — HTTP {response.statusCode}")
+        if not (200 <= response.statusCode < 300):
+            futil.log(f"{CMD_NAME}: _patch_task [{task_id}] — error: {response.data}")
+            return False
+        return True
+    except Exception as exc:
+        futil.log(f"{CMD_NAME}: _patch_task [{task_id}] — exception: {exc}")
+        return False
+
+
+def _fetch_list_statuses(list_id: str, api_token: str) -> list:
+    """GET /api/v2/list/{list_id} and return its statuses array sorted by orderindex.
+
+    Each item is a dict like: {"status": "in progress", "color": "#...", ...}.
+    Returns an empty list on any failure.
+    ClickUp docs: https://developer.clickup.com/reference/getlist
+    """
+    url = f"{CLICKUP_API_BASE}/list/{list_id}"
+    futil.log(f"{CMD_NAME}: _fetch_list_statuses — GET '{url}'")
+    try:
+        req = adsk.core.HttpRequest.create(url, adsk.core.HttpMethods.GetMethod)
+        req.setHeader("Authorization", api_token)
+        req.setHeader("Accept", "application/json")
+        response = req.executeSync()
+        futil.log(f"{CMD_NAME}: _fetch_list_statuses — HTTP {response.statusCode}")
+        if not (200 <= response.statusCode < 300):
+            futil.log(f"{CMD_NAME}: _fetch_list_statuses — error: {response.data}")
+            return []
+        data = json.loads(response.data)
+        statuses = data.get("statuses", [])
+        statuses.sort(key=lambda s: s.get("orderindex", 0))
+        return statuses
+    except Exception as exc:
+        futil.log(f"{CMD_NAME}: _fetch_list_statuses — exception: {exc}")
+        return []
 
 
 def _load_api_token() -> str:
