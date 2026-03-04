@@ -25,10 +25,8 @@ PANEL_ID = config.my_panel_id
 PANEL_NAME = config.my_panel_name
 PANEL_AFTER = config.my_panel_after
 
-# Reuse the addtask icons until dedicated ones are created
-ICON_FOLDER = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "addtask", "resources", ""
-)
+# Dedicated listTasks icons (clipboard body + three blue report lines)
+ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "")
 
 # ClickUp API configuration
 CLICKUP_API_BASE = "https://api.clickup.com/api/v2"
@@ -177,7 +175,7 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
 
     # Fetch both task sets
     doc_tasks_raw = _fetch_tasks_for_urn(list_id, urn_field_id, doc_urn, api_token)
-    all_tasks     = _fetch_all_tasks(list_id, api_token)
+    all_tasks = _fetch_all_tasks(list_id, api_token)
 
     # The ClickUp API text-field filter can return partial/fuzzy matches.
     # Apply a strict client-side exact-match on the custom field value.
@@ -215,18 +213,22 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
         list_link = "(No list URL configured)"
 
     inputs.addTextBoxCommandInput(
-        "info", "",
+        "info",
+        "",
         f"<b>Document:</b> {doc_name}<br>{list_link}",
-        2, True,
+        2,
+        True,
     )
 
     # ------------------------------------------------------------------ #
     # Table 1 — tasks linked to this document                            #
     # ------------------------------------------------------------------ #
     inputs.addTextBoxCommandInput(
-        "doc_tasks_header", "",
+        "doc_tasks_header",
+        "",
         f"<b>Tasks Linked to This Document</b> ({len(doc_tasks)})",
-        1, True,
+        1,
+        True,
     )
     _build_task_table(inputs, doc_tasks, table_id="doc_tasks_table", id_prefix="doc")
 
@@ -234,13 +236,18 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     # Table 2 — all tasks in the list                                    #
     # ------------------------------------------------------------------ #
     inputs.addTextBoxCommandInput(
-        "all_tasks_header", "",
+        "all_tasks_header",
+        "",
         f"<b>Project Tasks</b> ({len(all_tasks)})",
-        1, True,
+        1,
+        True,
     )
     _build_task_table(inputs, all_tasks, table_id="all_tasks_table", id_prefix="all")
 
     # Connect events
+    # isExecutedWhenPreEmpted makes Cancel/Escape behave the same as OK
+    # since this is a read-only dialog with nothing to cancel.
+    args.command.isExecutedWhenPreEmpted = True
     futil.add_handler(
         args.command.execute, command_execute, local_handlers=local_handlers
     )
@@ -267,16 +274,16 @@ def _build_task_table(
 
     # Header row
     for col_id, label in [
-        (f"{id_prefix}_h_name",     "Task Name"),
+        (f"{id_prefix}_h_name", "Task Name"),
         (f"{id_prefix}_h_priority", "Priority"),
-        (f"{id_prefix}_h_status",   "Status"),
+        (f"{id_prefix}_h_status", "Status"),
     ]:
         h = inputs.addStringValueInput(col_id, "", label)
         h.isReadOnly = True
 
-    table.addCommandInput(inputs.itemById(f"{id_prefix}_h_name"),     0, 0)
+    table.addCommandInput(inputs.itemById(f"{id_prefix}_h_name"), 0, 0)
     table.addCommandInput(inputs.itemById(f"{id_prefix}_h_priority"), 0, 1)
-    table.addCommandInput(inputs.itemById(f"{id_prefix}_h_status"),   0, 2)
+    table.addCommandInput(inputs.itemById(f"{id_prefix}_h_status"), 0, 2)
 
     if not tasks:
         empty = inputs.addTextBoxCommandInput(
@@ -287,7 +294,7 @@ def _build_task_table(
 
     for i, task in enumerate(tasks, start=1):
         task_name = task.get("name", "(unnamed)")
-        task_url  = task.get("url", "")
+        task_url = task.get("url", "")
 
         priority_id = None
         raw_priority = task.get("priority")
@@ -309,14 +316,12 @@ def _build_task_table(
         )
         priority_cell.isReadOnly = True
 
-        status_cell = inputs.addStringValueInput(
-            f"{id_prefix}_status_{i}", "", status
-        )
+        status_cell = inputs.addStringValueInput(f"{id_prefix}_status_{i}", "", status)
         status_cell.isReadOnly = True
 
-        table.addCommandInput(name_cell,     i, 0)
+        table.addCommandInput(name_cell, i, 0)
         table.addCommandInput(priority_cell, i, 1)
-        table.addCommandInput(status_cell,   i, 2)
+        table.addCommandInput(status_cell, i, 2)
 
     return table
 
@@ -336,6 +341,7 @@ def command_destroy(args: adsk.core.CommandEventArgs):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _load_api_token() -> str:
     """Read the ClickUp API token from cache/auth.json."""
@@ -358,7 +364,9 @@ def _load_list_id_for_project(project_urn: str) -> str:
             data = json.load(fh)
     except (json.JSONDecodeError, OSError):
         return ""
-    return data.get("projects", {}).get(project_urn, {}).get("clickup_list_id", "").strip()
+    return (
+        data.get("projects", {}).get(project_urn, {}).get("clickup_list_id", "").strip()
+    )
 
 
 def _load_clickup_url_for_project(project_urn: str) -> str:
@@ -386,13 +394,17 @@ def _get_urn_custom_field_id(list_id: str, api_token: str) -> str:
         response = req.executeSync()
 
         if not (200 <= response.statusCode < 300):
-            futil.log(f"{CMD_NAME}: _get_urn_custom_field_id — HTTP {response.statusCode}: {response.data}")
+            futil.log(
+                f"{CMD_NAME}: _get_urn_custom_field_id — HTTP {response.statusCode}: {response.data}"
+            )
             return ""
 
         fields = json.loads(response.data).get("fields", [])
         matched = next((f for f in fields if f.get("name") == TARGET_NAME), None)
         if matched:
-            futil.log(f"{CMD_NAME}: _get_urn_custom_field_id — found id='{matched.get('id')}'")
+            futil.log(
+                f"{CMD_NAME}: _get_urn_custom_field_id — found id='{matched.get('id')}'"
+            )
             return matched.get("id", "")
 
         futil.log(f"{CMD_NAME}: _get_urn_custom_field_id — '{TARGET_NAME}' not found.")
@@ -413,12 +425,16 @@ def _fetch_tasks_for_urn(
     """
     import urllib.parse
 
-    cf_filter = json.dumps([{"field_id": urn_field_id, "operator": "=", "value": doc_urn}])
-    params = urllib.parse.urlencode({
-        "custom_field": cf_filter,
-        "page": 0,
-        "include_closed": "true",
-    })
+    cf_filter = json.dumps(
+        [{"field_id": urn_field_id, "operator": "=", "value": doc_urn}]
+    )
+    params = urllib.parse.urlencode(
+        {
+            "custom_field": cf_filter,
+            "page": 0,
+            "include_closed": "true",
+        }
+    )
     url = f"{CLICKUP_API_BASE}/list/{list_id}/task?{params}"
     futil.log(f"{CMD_NAME}: _fetch_tasks_for_urn — GET '{url}'")
 
