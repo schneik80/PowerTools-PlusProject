@@ -14,6 +14,8 @@ PowerTools Plus Project is a Fusion 360 add-in that connects your design project
 | [Map Project to ClickUp](map-project.md) | QAT › PowerTools Settings | Link the active Fusion project to a ClickUp list |
 | [Open ClickUp](open-clickup.md) | Design toolbar | Open the mapped ClickUp list in your browser |
 | [Add ClickUp Task](add-task.md) | Design toolbar | Create a new ClickUp task from within Fusion |
+| [List Tasks](list-tasks.md) | Design toolbar | View tasks linked to the active document and the full project list |
+| [Update Tasks](update-tasks.md) | Design toolbar | Edit and save changes to tasks linked to the active document |
 
 ---
 

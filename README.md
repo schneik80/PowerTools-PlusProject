@@ -14,6 +14,8 @@ A Fusion 360 add-in that connects your design projects to [ClickUp](https://clic
 | [Map Project to ClickUp](docs/map-project.md) | QAT › PowerTools Settings | Link the active Fusion project to a ClickUp list |
 | [Open ClickUp](docs/open-clickup.md) | Design toolbar | Open the mapped ClickUp list in your browser |
 | [Add ClickUp Task](docs/add-task.md) | Design toolbar | Create a new ClickUp task from within Fusion |
+| [List Tasks](docs/list-tasks.md) | Design toolbar | View tasks linked to the active document and the full project list |
+| [Update Tasks](docs/update-tasks.md) | Design toolbar | Edit and save changes to tasks linked to the active document |
 
 ---
 
@@ -51,6 +53,8 @@ Open any saved document in a project, run **Map Project to ClickUp**, and enter 
 2. Run **Map Project to ClickUp** once per project to store the list URL and ID.
 3. While working in Fusion, use **Open ClickUp** to jump directly to the task list.
 4. Use **Add ClickUp Task** to log new tasks — optionally linking the active Fusion document.
+5. Use **List Tasks** to review all tasks linked to the active document or the full project list.
+6. Use **Update Tasks** to edit task name, due date, or priority without leaving Fusion.
 
 ---
 
