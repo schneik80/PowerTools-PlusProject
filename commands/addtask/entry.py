@@ -2,7 +2,7 @@ import adsk.core
 import adsk.fusion
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import quote
 
 from ...lib import fusionAddInUtils as futil
@@ -123,28 +123,91 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
 
     inputs = args.command.commandInputs
 
-    # Task name — single-line string input
-    inputs.addStringValueInput("task_name", "Task Name:", "")
+    # Task name — default to active document name + " Task"
+    active_doc = app.activeDocument
+    doc_name = active_doc.name if active_doc else ""
+    default_task_name = f"{doc_name} Task" if doc_name else ""
+    name_input = inputs.addStringValueInput(
+        "task_name", "Task Name:", default_task_name
+    )
+    name_input.tooltip = "Task Name"
+    name_input.tooltipDescription = "The title of the new ClickUp task."
 
     # Description — multi-line editable text box
-    inputs.addTextBoxCommandInput("task_description", "Description:", "", 4, False)
+    desc_input = inputs.addTextBoxCommandInput(
+        "task_description", "Description:", "", 4, False
+    )
+    desc_input.tooltip = "Description"
+    desc_input.tooltipDescription = "Optional task description. Supports Markdown formatting (bold, italic, bullet lists, etc.)."
 
     # Due date — single-line string input in YYYY-MM-DD format
     today = datetime.now().strftime("%Y-%m-%d")
-    inputs.addStringValueInput("task_due_date", "Due Date (YYYY-MM-DD):", today)
+    due_input = inputs.addStringValueInput(
+        "task_due_date", "Due Date (YYYY-MM-DD):", today
+    )
+    due_input.tooltip = "Due Date"
+    due_input.tooltipDescription = "Enter the task due date in YYYY-MM-DD format, or use the shortcut buttons below to fill it automatically."
+
+    # Three individual button rows so each button has its own unique tooltip.
+    # (ListItem does not support tooltip/tooltipDescription; the CommandInput does.)
+    _res = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources")
+
+    btn_row_tmr = inputs.addButtonRowCommandInput(
+        "btn_row_tomorrow", "Quick Date", False
+    )
+    btn_row_tmr.tooltip = "Tomorrow"
+    btn_row_tmr.tooltipDescription = (
+        "Sets the due date to <b>tomorrow</b>.<br>"
+        "If tomorrow falls on a Saturday or Sunday the date is advanced "
+        "to the following <b>Monday</b>."
+    )
+    btn_row_tmr.listItems.add("Tomorrow", False, os.path.join(_res, "btn_tomorrow"))
+
+    btn_row_eow = inputs.addButtonRowCommandInput("btn_row_eow", " ", False)
+    btn_row_eow.tooltip = "End of Week"
+    btn_row_eow.tooltipDescription = (
+        "Sets the due date to <b>this Friday</b>.<br>"
+        "If today is Saturday or Sunday the date is set to <b>next Friday</b>."
+    )
+    btn_row_eow.listItems.add(
+        "End of Week", False, os.path.join(_res, "btn_end_of_week")
+    )
+
+    btn_row_1w = inputs.addButtonRowCommandInput("btn_row_1w", " ", False)
+    btn_row_1w.tooltip = "In 1 Week"
+    btn_row_1w.tooltipDescription = (
+        "Sets the due date to <b>today + 7 days</b>.<br>"
+        "If that date falls on a Saturday or Sunday it is advanced "
+        "to the following <b>Monday</b>."
+    )
+    btn_row_1w.listItems.add("In 1 Week", False, os.path.join(_res, "btn_in_1_week"))
 
     # Priority — drop-down (ClickUp values: 1=Urgent, 2=High, 3=Normal, 4=Low)
     priority_input = inputs.addDropDownCommandInput(
         "task_priority", "Priority:", adsk.core.DropDownStyles.TextListDropDownStyle
     )
-    priority_input.listItems.add("Normal", True)   # default selected
+    priority_input.tooltip = "Priority"
+    priority_input.tooltipDescription = (
+        "Set the task priority in ClickUp:\n"
+        "  • Urgent — must be done immediately\n"
+        "  • High — important, tackle soon\n"
+        "  • Normal — standard priority (default)\n"
+        "  • Low — nice to have"
+    )
+    priority_input.listItems.add("Normal", True)  # default selected
     priority_input.listItems.add("Low", False)
     priority_input.listItems.add("High", False)
     priority_input.listItems.add("Urgent", False)
 
     # Link Document — checkbox to attach an Open on Desktop link as a custom field
-    inputs.addBoolValueInput(
-        "link_document", "Link Document to Task", True, "", False
+    link_input = inputs.addBoolValueInput(
+        "link_document", "Link Document to Task", True, "", True
+    )
+    link_input.tooltip = "Link Document to Task"
+    link_input.tooltipDescription = (
+        "When checked, a shortened Open-on-Desktop link for the active Fusion 360 document "
+        "is attached to the task via the 'Fusion Design' custom field in ClickUp. "
+        "Requires a TinyURL API token configured in Set Tokens."
     )
 
     # Connect to command events
@@ -154,6 +217,11 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     futil.add_handler(
         args.command.validateInputs,
         command_validate_input,
+        local_handlers=local_handlers,
+    )
+    futil.add_handler(
+        args.command.inputChanged,
+        command_input_changed,
         local_handlers=local_handlers,
     )
     futil.add_handler(
@@ -180,14 +248,20 @@ def command_execute(args: adsk.core.CommandEventArgs):
         task_name = getattr(name_input, "value", "").strip()
         task_description = getattr(desc_input, "text", "").strip()
         due_date_str = getattr(date_input, "value", "").strip()
-        priority_label = priority_input.selectedItem.name if priority_input and priority_input.selectedItem else "Normal"
+        priority_label = (
+            priority_input.selectedItem.name
+            if priority_input and priority_input.selectedItem
+            else "Normal"
+        )
         link_document = getattr(link_doc_input, "value", False)
 
         # Map label → ClickUp priority integer
         _PRIORITY_MAP = {"Low": 4, "Normal": 3, "High": 2, "Urgent": 1}
         priority_value = _PRIORITY_MAP.get(priority_label, 3)
 
-        futil.log(f"{CMD_NAME}: Inputs collected — name='{task_name}', due='{due_date_str}', priority='{priority_label}'({priority_value}), link_document={link_document}")
+        futil.log(
+            f"{CMD_NAME}: Inputs collected — name='{task_name}', due='{due_date_str}', priority='{priority_label}'({priority_value}), link_document={link_document}"
+        )
 
         # ------------------------------------------------------------------ #
         # 1b. Build Open-on-Desktop URL and shorten via TinyURL (if checked) #
@@ -195,7 +269,9 @@ def command_execute(args: adsk.core.CommandEventArgs):
         # ------------------------------------------------------------------ #
         short_url = None
         if link_document:
-            futil.log(f"{CMD_NAME}: [TinyURL] link_document=True — building Open-on-Desktop URL.")
+            futil.log(
+                f"{CMD_NAME}: [TinyURL] link_document=True — building Open-on-Desktop URL."
+            )
             active_doc = app.activeDocument
             futil.log(
                 f"{CMD_NAME}: [TinyURL] active_doc='{getattr(active_doc, 'name', None)}' "
@@ -208,13 +284,21 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
                 tinyurl_token = _load_tinyurl_token()
                 if tinyurl_token:
-                    futil.log(f"{CMD_NAME}: [TinyURL] token loaded (len={len(tinyurl_token)}), calling _shorten_url...")
+                    futil.log(
+                        f"{CMD_NAME}: [TinyURL] token loaded (len={len(tinyurl_token)}), calling _shorten_url..."
+                    )
                     short_url = _shorten_url(fusion_url, tinyurl_token)
-                    futil.log(f"{CMD_NAME}: [TinyURL] _shorten_url returned: '{short_url}'")
+                    futil.log(
+                        f"{CMD_NAME}: [TinyURL] _shorten_url returned: '{short_url}'"
+                    )
                 else:
-                    futil.log(f"{CMD_NAME}: [TinyURL] WARNING — tinyurl_api_token missing in auth.json. Skipping.")
+                    futil.log(
+                        f"{CMD_NAME}: [TinyURL] WARNING — tinyurl_api_token missing in auth.json. Skipping."
+                    )
             else:
-                futil.log(f"{CMD_NAME}: [TinyURL] WARNING — document unsaved or no dataFile. Skipping.")
+                futil.log(
+                    f"{CMD_NAME}: [TinyURL] WARNING — document unsaved or no dataFile. Skipping."
+                )
         else:
             futil.log(f"{CMD_NAME}: link_document=False — skipping document link.")
 
@@ -235,7 +319,9 @@ def command_execute(args: adsk.core.CommandEventArgs):
             )
             return
 
-        futil.log(f"{CMD_NAME}: API token loaded successfully (length={len(api_token)}).")
+        futil.log(
+            f"{CMD_NAME}: API token loaded successfully (length={len(api_token)})."
+        )
 
         # ------------------------------------------------------------------ #
         # 2b. Resolve list ID from projects.json using the active project    #
@@ -258,13 +344,15 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
         list_id = _load_list_id_for_project(project_urn)
         if not list_id:
-            futil.log(f"{CMD_NAME}: ERROR — clickup_list_id not set for project '{project_urn}'")
+            futil.log(
+                f"{CMD_NAME}: ERROR — clickup_list_id not set for project '{project_urn}'"
+            )
             ui.messageBox(
                 f"No ClickUp list ID configured for this project.\n\n"
                 f"To fix:\n"
                 f"1. Open ClickUp and navigate into a List (not a Folder).\n"
                 f"2. Copy the number after /li/ in the URL.\n"
-                f"3. Add \"clickup_list_id\" to this project's entry in:\n"
+                f'3. Add "clickup_list_id" to this project\'s entry in:\n'
                 f"   {config.PROJECTS_JSON_PATH}",
                 "List ID Not Configured",
             )
@@ -294,7 +382,9 @@ def command_execute(args: adsk.core.CommandEventArgs):
                 payload["due_date_time"] = False  # date only, no specific time
                 futil.log(f"{CMD_NAME}: Due date '{due_date_str}' → {due_ms} ms.")
             else:
-                futil.log(f"{CMD_NAME}: WARNING — Could not parse due date '{due_date_str}'. Skipping.")
+                futil.log(
+                    f"{CMD_NAME}: WARNING — Could not parse due date '{due_date_str}'. Skipping."
+                )
 
         futil.log(f"{CMD_NAME}: Payload prepared — {list(payload.keys())}")
 
@@ -304,11 +394,15 @@ def command_execute(args: adsk.core.CommandEventArgs):
         custom_fields_list = []
 
         if short_url:
-            futil.log(f"{CMD_NAME}: [TinyURL] Attaching short_url='{short_url}' to ClickUp custom field.")
+            futil.log(
+                f"{CMD_NAME}: [TinyURL] Attaching short_url='{short_url}' to ClickUp custom field."
+            )
             url_field_id = _get_url_custom_field_id(list_id, api_token)
             if url_field_id:
                 custom_fields_list.append({"id": url_field_id, "value": short_url})
-                futil.log(f"{CMD_NAME}: [TinyURL] URL custom field queued — field_id='{url_field_id}'.")
+                futil.log(
+                    f"{CMD_NAME}: [TinyURL] URL custom field queued — field_id='{url_field_id}'."
+                )
             else:
                 futil.log(
                     f"{CMD_NAME}: [TinyURL] WARNING — 'Fusion Design' URL field not found on list '{list_id}'. "
@@ -329,7 +423,9 @@ def command_execute(args: adsk.core.CommandEventArgs):
             futil.log(f"{CMD_NAME}: [URN] Document URN resolved: '{doc_urn}'")
             urn_field_id = _get_urn_custom_field_id(list_id, api_token)
             if urn_field_id:
-                futil.log(f"{CMD_NAME}: [URN] 'Fusion Document URN' field found — id='{urn_field_id}'. Will write after task creation.")
+                futil.log(
+                    f"{CMD_NAME}: [URN] 'Fusion Document URN' field found — id='{urn_field_id}'. Will write after task creation."
+                )
             else:
                 futil.log(
                     f"{CMD_NAME}: [URN] WARNING — 'Fusion Document URN' field not found on list '{list_id}'. "
@@ -338,7 +434,9 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
         if custom_fields_list:
             payload["custom_fields"] = custom_fields_list
-            futil.log(f"{CMD_NAME}: payload['custom_fields'] set with {len(custom_fields_list)} field(s).")
+            futil.log(
+                f"{CMD_NAME}: payload['custom_fields'] set with {len(custom_fields_list)} field(s)."
+            )
 
         # ------------------------------------------------------------------ #
         # 4. POST to ClickUp API using adsk.core.HttpRequest (Fusion native) #
@@ -382,17 +480,25 @@ def command_execute(args: adsk.core.CommandEventArgs):
             # for text-type fields.                                              #
             # ------------------------------------------------------------------ #
             if urn_field_id and doc_urn and task_id:
-                futil.log(f"{CMD_NAME}: [URN] Setting 'Fusion Document URN' on task '{task_id}'.")
-                urn_ok = _set_task_custom_field(task_id, urn_field_id, doc_urn, api_token)
+                futil.log(
+                    f"{CMD_NAME}: [URN] Setting 'Fusion Document URN' on task '{task_id}'."
+                )
+                urn_ok = _set_task_custom_field(
+                    task_id, urn_field_id, doc_urn, api_token
+                )
                 if urn_ok:
-                    futil.log(f"{CMD_NAME}: [URN] 'Fusion Document URN' written successfully.")
+                    futil.log(
+                        f"{CMD_NAME}: [URN] 'Fusion Document URN' written successfully."
+                    )
                 else:
-                    futil.log(f"{CMD_NAME}: [URN] WARNING — failed to write 'Fusion Document URN' field.")
+                    futil.log(
+                        f"{CMD_NAME}: [URN] WARNING — failed to write 'Fusion Document URN' field."
+                    )
 
             ui.messageBox(
                 f"Task <b>{task_name}</b> created.<br>"
                 f"Priority: {priority_label}<br><br>"
-                f"<a href=\"{task_url}\">{task_url}</a>",
+                f'<a href="{task_url}">{task_url}</a>',
                 "ClickUp Task Created",
             )
 
@@ -400,9 +506,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
             error_body = response.data
             futil.log(f"{CMD_NAME}: ERROR — API returned {status_code}: {error_body}")
             ui.messageBox(
-                f"Failed to create task.\n\n"
-                f"HTTP {status_code}\n\n"
-                f"{error_body}",
+                f"Failed to create task.\n\n" f"HTTP {status_code}\n\n" f"{error_body}",
                 "ClickUp API Error",
             )
 
@@ -434,6 +538,33 @@ def command_validate_input(args: adsk.core.ValidateInputsEventArgs):
     args.areInputsValid = True
 
 
+def command_input_changed(args: adsk.core.InputChangedEventArgs):
+    """Handles date shortcut button row clicks — calculates and fills the due date field."""
+    changed = args.input
+    if changed.id not in ("btn_row_tomorrow", "btn_row_eow", "btn_row_1w"):
+        return
+
+    today = datetime.now()
+
+    if changed.id == "btn_row_tomorrow":
+        # Next day, rounded up to a business day
+        target = _next_business_day(today + timedelta(days=1))
+
+    elif changed.id == "btn_row_eow":
+        # Friday of the current week; if today is Sat/Sun, jumps to next Friday
+        days_until_friday = (4 - today.weekday()) % 7
+        target = today + timedelta(days=days_until_friday)
+
+    else:  # btn_row_1w
+        # Same day next week, rounded up to a business day if it lands on a weekend
+        target = _next_business_day(today + timedelta(days=7))
+
+    # Write the calculated date back into the due date field
+    date_input = args.inputs.itemById("task_due_date")
+    if date_input:
+        date_input.value = target.strftime("%Y-%m-%d")
+
+
 def command_destroy(args: adsk.core.CommandEventArgs):
     """Called when the command dialog closes — clears event handler references."""
     futil.log(f"{CMD_NAME}: Command destroyed. Clearing local handlers.")
@@ -444,6 +575,21 @@ def command_destroy(args: adsk.core.CommandEventArgs):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _next_business_day(dt: datetime) -> datetime:
+    """Return *dt* unchanged if it is a weekday (Mon–Fri).
+    If it falls on Saturday, advance to the following Monday (+2 days).
+    If it falls on Sunday, advance to Monday (+1 day).
+    This ensures every returned date is a US business day (weekend-free).
+    """
+    weekday = dt.weekday()  # 0 = Monday … 6 = Sunday
+    if weekday == 5:  # Saturday → Monday
+        dt += timedelta(days=2)
+    elif weekday == 6:  # Sunday → Monday
+        dt += timedelta(days=1)
+    return dt
+
 
 def _load_api_token() -> str:
     """Read the ClickUp API token from cache/auth.json.
@@ -459,7 +605,9 @@ def _load_api_token() -> str:
     futil.log(f"{CMD_NAME}: _load_api_token — reading '{AUTH_JSON_PATH}'")
 
     if not os.path.isfile(AUTH_JSON_PATH):
-        futil.log(f"{CMD_NAME}: _load_api_token — auth.json not found at '{AUTH_JSON_PATH}'")
+        futil.log(
+            f"{CMD_NAME}: _load_api_token — auth.json not found at '{AUTH_JSON_PATH}'"
+        )
         return ""
 
     try:
@@ -474,7 +622,9 @@ def _load_api_token() -> str:
 
     token = data.get("clickup_api_token", "").strip()
     if not token:
-        futil.log(f"{CMD_NAME}: _load_api_token — 'clickup_api_token' key is missing or empty.")
+        futil.log(
+            f"{CMD_NAME}: _load_api_token — 'clickup_api_token' key is missing or empty."
+        )
     return token
 
 
@@ -513,7 +663,9 @@ def _load_list_id_for_project(project_urn: str) -> str:
     project_entry = data.get("projects", {}).get(project_urn, {})
     list_id = project_entry.get("clickup_list_id", "").strip()
     if not list_id:
-        futil.log(f"{CMD_NAME}: _load_list_id_for_project — 'clickup_list_id' missing or empty for URN '{project_urn}'.")
+        futil.log(
+            f"{CMD_NAME}: _load_list_id_for_project — 'clickup_list_id' missing or empty for URN '{project_urn}'."
+        )
     return list_id
 
 
@@ -594,7 +746,8 @@ def _get_url_custom_field_id(list_id: str, api_token: str) -> str:
         # Find the field named "Fusion Design" with type "url"
         matched = next(
             (
-                f for f in all_fields
+                f
+                for f in all_fields
                 if f.get("name") == TARGET_NAME and f.get("type") == TARGET_TYPE
             ),
             None,
@@ -618,7 +771,9 @@ def _get_url_custom_field_id(list_id: str, api_token: str) -> str:
         return ""
 
 
-def _set_task_custom_field(task_id: str, field_id: str, value: str, api_token: str) -> bool:
+def _set_task_custom_field(
+    task_id: str, field_id: str, value: str, api_token: str
+) -> bool:
     """Set a custom field value on an existing task via the dedicated ClickUp endpoint.
 
     Using this endpoint (rather than inline ``custom_fields`` on task creation) is
@@ -738,7 +893,9 @@ def _load_tinyurl_token() -> str:
 
     token = data.get("tinyurl_api_token", "").strip()
     if not token:
-        futil.log(f"{CMD_NAME}: _load_tinyurl_token — 'tinyurl_api_token' missing or empty.")
+        futil.log(
+            f"{CMD_NAME}: _load_tinyurl_token — 'tinyurl_api_token' missing or empty."
+        )
     return token
 
 
@@ -756,7 +913,9 @@ def _shorten_url(long_url: str, tinyurl_token: str) -> str:
     """
     futil.log(f"{CMD_NAME}: _shorten_url — shortening via TinyURL API")
     futil.log(f"{CMD_NAME}: _shorten_url — long_url='{long_url}'")
-    futil.log(f"{CMD_NAME}: _shorten_url — token prefix='{tinyurl_token[:8]}...' (len={len(tinyurl_token)})")
+    futil.log(
+        f"{CMD_NAME}: _shorten_url — token prefix='{tinyurl_token[:8]}...' (len={len(tinyurl_token)})"
+    )
 
     TINYURL_API_BASE = "https://api.tinyurl.com"
     endpoint = f"{TINYURL_API_BASE}/create"
@@ -783,11 +942,17 @@ def _shorten_url(long_url: str, tinyurl_token: str) -> str:
             resp_data = json.loads(raw_response)
             short_url = resp_data.get("data", {}).get("tiny_url", "")
             if short_url:
-                futil.log(f"{CMD_NAME}: _shorten_url — SUCCESS: short_url='{short_url}'")
+                futil.log(
+                    f"{CMD_NAME}: _shorten_url — SUCCESS: short_url='{short_url}'"
+                )
                 return short_url
-            futil.log(f"{CMD_NAME}: _shorten_url — 'tiny_url' key missing in response data. Returning None.")
+            futil.log(
+                f"{CMD_NAME}: _shorten_url — 'tiny_url' key missing in response data. Returning None."
+            )
         else:
-            futil.log(f"{CMD_NAME}: _shorten_url — FAILED: non-2xx status={status} body={raw_response}. Returning None.")
+            futil.log(
+                f"{CMD_NAME}: _shorten_url — FAILED: non-2xx status={status} body={raw_response}. Returning None."
+            )
 
     except Exception as exc:
         futil.log(f"{CMD_NAME}: _shorten_url — EXCEPTION: {exc}. Returning None.")
