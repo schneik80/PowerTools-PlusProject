@@ -46,10 +46,13 @@ local_handlers = []
 # consumed in command_execute to detect changed fields.
 _task_originals: dict = (
     {}
-)  # task_id → {"name": str, "due_ms": int|None, "priority": int|None, "status": str|None}
+)  # task_id → {"name": str, "due_ms": int|None, "priority": int|None, "status": str|None, "description": str, "time_estimate_ms": int|None}
 _api_token: str = ""
 _list_url: str = ""
 _list_statuses: list = []  # [{"status": str, "color": str}, ...]
+_list_members: list = []  # [{"id": int, "username": str, "email": str}, ...]
+_selected_task_id: str = ""  # task ID of the currently selected table row
+_pending_edits: dict = {}  # task_id → {desc, time_hours, assignee_name, is_private}
 
 
 def start():
@@ -92,11 +95,14 @@ def stop():
 
 def command_created(args: adsk.core.CommandCreatedEventArgs):
     """Builds the update-tasks dialog."""
-    global _task_originals, _api_token, _list_url, _list_statuses
+    global _task_originals, _api_token, _list_url, _list_statuses, _list_members, _selected_task_id, _pending_edits
     _task_originals = {}
     _api_token = ""
     _list_url = ""
     _list_statuses = []
+    _list_members = []
+    _selected_task_id = ""
+    _pending_edits = {}
 
     futil.log(f"{CMD_NAME}: Command Created — building update tasks dialog.")
 
@@ -171,6 +177,12 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
         f"{CMD_NAME}: fetched {len(_list_statuses)} status(es) for list '{list_id}'."
     )
 
+    # Fetch list members (used to populate the assignee dropdown)
+    _list_members = _fetch_list_members(list_id, _api_token)
+    futil.log(
+        f"{CMD_NAME}: fetched {len(_list_members)} member(s) for list '{list_id}'."
+    )
+
     # ------------------------------------------------------------------ #
     # Fetch tasks linked to this document                                 #
     # ------------------------------------------------------------------ #
@@ -226,11 +238,25 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
 
         status_str = task.get("status", {}).get("status", "").lower()
 
+        try:
+            time_est_ms = (
+                int(task["time_estimate"]) if task.get("time_estimate") else None
+            )
+        except (ValueError, TypeError):
+            time_est_ms = None
+
+        raw_assignees = task.get("assignees", [])
+        assignee_ids = [int(a["id"]) for a in raw_assignees if a.get("id")]
+
         _task_originals[tid] = {
             "name": task.get("name", ""),
             "due_ms": due_ms,
             "priority": pri_int,
             "status": status_str,
+            "description": (task.get("description") or "").strip(),
+            "time_estimate_ms": time_est_ms,
+            "is_private": bool(task.get("is_private", False)),
+            "assignee_ids": assignee_ids,
         }
 
     # ------------------------------------------------------------------ #
@@ -263,6 +289,61 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     _build_editable_task_table(inputs, doc_tasks, _list_statuses)
 
     # ------------------------------------------------------------------ #
+    # Shared detail controls (populated when a table row is selected)     #
+    # ------------------------------------------------------------------ #
+    inputs.addTextBoxCommandInput(
+        "detail_header",
+        "",
+        "Select a row above to view and edit task details.",
+        1,
+        True,
+    )
+
+    desc_ctrl = inputs.addTextBoxCommandInput(
+        "detail_desc", "Description", "", 6, False
+    )
+    desc_ctrl.isEnabled = False
+
+    time_ctrl = inputs.addStringValueInput("detail_time", "Est. Hours", "")
+    time_ctrl.isEnabled = False
+    time_ctrl.tooltip = "Time Estimate (hours)"
+    time_ctrl.tooltipDescription = (
+        "Enter the estimated time in hours (e.g. 1.5). Leave blank to clear."
+    )
+
+    assignee_ctrl = inputs.addDropDownCommandInput(
+        "detail_assignee",
+        "Assignee",
+        adsk.core.DropDownStyles.TextListDropDownStyle,
+    )
+    assignee_ctrl.isEnabled = False
+    assignee_ctrl.tooltip = "Assignee"
+    assignee_ctrl.tooltipDescription = (
+        "Assign or reassign this task to a list member. "
+        "Select '— Unassigned —' to remove all assignees."
+    )
+    assignee_ctrl.listItems.add("— Unassigned —", True)
+    for member in _list_members:
+        assignee_ctrl.listItems.add(member["username"], False)
+
+    private_ctrl = inputs.addBoolValueInput(
+        "detail_private", "Private Task", True, "", False
+    )
+    private_ctrl.isEnabled = False
+    private_ctrl.tooltip = "Private Task"
+    private_ctrl.tooltipDescription = (
+        "When checked, this task is only visible to its creator and assignees. "
+        "Select an assignee above to enable this option."
+    )
+
+    apply_btn = inputs.addBoolValueInput(
+        "btn_apply_edits", "Apply Edits to Selected Row", True, "", False
+    )
+    apply_btn.isEnabled = False
+    apply_btn.tooltip = "Apply Edits"
+    apply_btn.tooltipDescription = "Save the detail-panel edits for the selected task and return the panel to its empty state."
+
+    # ------------------------------------------------------------------ #
     # Connect events                                                      #
     # ------------------------------------------------------------------ #
     futil.add_handler(
@@ -271,6 +352,11 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     futil.add_handler(
         args.command.validateInputs,
         command_validate_input,
+        local_handlers=local_handlers,
+    )
+    futil.add_handler(
+        args.command.inputChanged,
+        command_input_changed,
         local_handlers=local_handlers,
     )
     futil.add_handler(
@@ -283,23 +369,25 @@ def _build_editable_task_table(
     tasks: list,
     status_options: list = None,
 ) -> None:
-    """Add an editable table — Task Name | Due Date | Priority | Status — to *inputs*.
+    """Add an editable table — Select | Task Name | Due Date | Priority | Status — to *inputs*.
 
-    Name and Due Date are editable text inputs.
-    Priority and Status are editable drop-downs.
+    A checkbox in the first column lets the user select a row; selection populates the
+    shared detail controls (description, time estimate, assignee, private) below the table.
+    Name, Due Date, Priority, and Status remain directly editable in the table.
     *status_options* is a list of dicts from the ClickUp API: [{"status": str, ...}, ...].
     If empty or None, the status cell falls back to a read-only string.
     """
     if status_options is None:
         status_options = []
-    table = inputs.addTableCommandInput("tasks_table", "", 4, "5:3:2:2")
+    table = inputs.addTableCommandInput("tasks_table", "", 5, "1:5:3:2:2")
     table.hasGrid = True
     table.minimumVisibleRows = 3
     table.maximumVisibleRows = 15
-    table.tooltip = "Edit task fields then click OK to save all changes to ClickUp."
+    table.tooltip = "Check a row to edit its details below. Edit Name, Due, Priority, and Status directly in the table."
 
     # Header row
     for col_id, label in [
+        ("h_sel", ""),
         ("h_name", "Task Name"),
         ("h_due", "Due Date"),
         ("h_priority", "Priority"),
@@ -308,16 +396,17 @@ def _build_editable_task_table(
         cell = inputs.addStringValueInput(col_id, "", label)
         cell.isReadOnly = True
 
-    table.addCommandInput(inputs.itemById("h_name"), 0, 0)
-    table.addCommandInput(inputs.itemById("h_due"), 0, 1)
-    table.addCommandInput(inputs.itemById("h_priority"), 0, 2)
-    table.addCommandInput(inputs.itemById("h_status"), 0, 3)
+    table.addCommandInput(inputs.itemById("h_sel"), 0, 0)
+    table.addCommandInput(inputs.itemById("h_name"), 0, 1)
+    table.addCommandInput(inputs.itemById("h_due"), 0, 2)
+    table.addCommandInput(inputs.itemById("h_priority"), 0, 3)
+    table.addCommandInput(inputs.itemById("h_status"), 0, 4)
 
     if not tasks:
         empty = inputs.addTextBoxCommandInput(
             "tasks_empty", "", "No tasks linked to this document.", 1, True
         )
-        table.addCommandInput(empty, 1, 0, 0, 4)
+        table.addCommandInput(empty, 1, 0, 0, 5)
         return
 
     for i, task in enumerate(tasks, start=1):
@@ -347,19 +436,27 @@ def _build_editable_task_table(
         # Status — current value (lowercase to match ClickUp API)
         status_str = task.get("status", {}).get("status", "").lower()
 
-        # Name cell — editable text with link in tooltip
+        # Select checkbox — col 0
+        sel_cell = inputs.addBoolValueInput(f"sel_{tid}", "", True, "", False)
+        sel_cell.tooltip = task_name
+        sel_cell.tooltipDescription = (
+            "Check to edit the details (description, time estimate, assignee) for this task."
+            + (f'<br><a href="{task_url}">Open in ClickUp</a>' if task_url else "")
+        )
+
+        # Name cell — editable text with link in tooltip — col 1
         name_cell = inputs.addStringValueInput(f"name_{tid}", "", task_name)
         name_cell.tooltip = "Task Name"
         name_cell.tooltipDescription = f"Edit the task name.<br>" + (
             f'<a href="{task_url}">Open in ClickUp</a>' if task_url else ""
         )
 
-        # Due date cell — editable text
+        # Due date cell — editable text — col 2
         due_cell = inputs.addStringValueInput(f"due_{tid}", "", due_str)
         due_cell.tooltip = "Due Date"
         due_cell.tooltipDescription = "Enter a date in <b>YYYY-MM-DD</b> format, or leave blank to clear the due date."
 
-        # Priority cell — drop-down
+        # Priority cell — drop-down — col 3
         pri_cell = inputs.addDropDownCommandInput(
             f"priority_{tid}",
             "",
@@ -370,7 +467,7 @@ def _build_editable_task_table(
         for opt in _PRIORITY_OPTIONS:
             pri_cell.listItems.add(opt, opt == pri_label)
 
-        # Status cell — dropdown if we have API-sourced options, else read-only
+        # Status cell — dropdown if we have API-sourced options, else read-only — col 4
         if status_options:
             status_cell = inputs.addDropDownCommandInput(
                 f"status_{tid}",
@@ -397,10 +494,11 @@ def _build_editable_task_table(
             status_cell.tooltip = "Status"
             status_cell.tooltipDescription = "Status could not be fetched from ClickUp."
 
-        table.addCommandInput(name_cell, i, 0)
-        table.addCommandInput(due_cell, i, 1)
-        table.addCommandInput(pri_cell, i, 2)
-        table.addCommandInput(status_cell, i, 3)
+        table.addCommandInput(sel_cell, i, 0)
+        table.addCommandInput(name_cell, i, 1)
+        table.addCommandInput(due_cell, i, 2)
+        table.addCommandInput(pri_cell, i, 3)
+        table.addCommandInput(status_cell, i, 4)
 
 
 def command_execute(args: adsk.core.CommandEventArgs):
@@ -410,6 +508,10 @@ def command_execute(args: adsk.core.CommandEventArgs):
     inputs = args.command.commandInputs
     updated = 0
     errors = 0
+
+    # Auto-apply any unsaved detail-panel edits for the currently selected row
+    if _selected_task_id:
+        _store_pending_edits(inputs, _selected_task_id)
 
     for task_id, original in _task_originals.items():
 
@@ -470,6 +572,55 @@ def command_execute(args: adsk.core.CommandEventArgs):
             payload["status"] = new_status
             futil.log(f"{CMD_NAME}: [{task_id}] status changed → '{new_status}'")
 
+        # ---- Description (from pending edits) ----
+        if task_id in _pending_edits:
+            new_desc = (_pending_edits[task_id].get("desc", "") or "").strip()
+            if new_desc != (original.get("description", "") or "").strip():
+                payload["description"] = new_desc
+                futil.log(f"{CMD_NAME}: [{task_id}] description changed")
+
+        # ---- Time estimate (from pending edits) ----
+        if task_id in _pending_edits:
+            raw_val = _pending_edits[task_id].get("time_hours", "").strip()
+            try:
+                new_est_ms = int(float(raw_val) * 3_600_000) if raw_val else 0
+            except ValueError:
+                new_est_ms = original.get("time_estimate_ms") or 0
+            orig_est_ms = original.get("time_estimate_ms") or 0
+            if new_est_ms != orig_est_ms:
+                payload["time_estimate"] = new_est_ms
+                futil.log(
+                    f"{CMD_NAME}: [{task_id}] time_estimate changed → {new_est_ms}ms"
+                )
+
+        # ---- Private (from pending edits) ----
+        if task_id in _pending_edits:
+            new_private = bool(_pending_edits[task_id].get("is_private", False))
+            if new_private != original.get("is_private", False):
+                payload["is_private"] = new_private
+                futil.log(f"{CMD_NAME}: [{task_id}] is_private changed → {new_private}")
+
+        # ---- Assignee (from pending edits) ----
+        if task_id in _pending_edits:
+            selected_name = _pending_edits[task_id].get(
+                "assignee_name", "— Unassigned —"
+            )
+            new_assignee_id = 0
+            for member in _list_members:
+                if member["username"] == selected_name:
+                    new_assignee_id = member["id"]
+                    break
+            orig_assignee_ids = original.get("assignee_ids", [])
+            orig_first_id = orig_assignee_ids[0] if orig_assignee_ids else 0
+            if new_assignee_id != orig_first_id:
+                add_ids = [new_assignee_id] if new_assignee_id else []
+                rem_ids = [orig_first_id] if orig_first_id else []
+                payload["assignees"] = {"add": add_ids, "rem": rem_ids}
+                futil.log(
+                    f"{CMD_NAME}: [{task_id}] assignees changed → "
+                    f"add={add_ids} rem={rem_ids}"
+                )
+
         if not payload:
             futil.log(f"{CMD_NAME}: [{task_id}] no changes — skipping.")
             continue
@@ -518,6 +669,200 @@ def command_destroy(args: adsk.core.CommandEventArgs):
     futil.log(f"{CMD_NAME}: Destroyed. Clearing handlers.")
     global local_handlers
     local_handlers = []
+
+
+def command_input_changed(args: adsk.core.InputChangedEventArgs):
+    """Handles table row selection, the Apply button, and the detail-panel assignee toggle."""
+    global _selected_task_id, _pending_edits
+    changed = args.input
+    inputs = args.inputs
+
+    # ---- Row selection via sel_{tid} checkboxes ----
+    if changed.id.startswith("sel_"):
+        tid = changed.id[4:]
+        if getattr(changed, "value", False):
+            # New row selected — update tracking first, then deselect any other row
+            _selected_task_id = tid
+            for other_tid in _task_originals:
+                if other_tid != tid:
+                    other_sel = inputs.itemById(f"sel_{other_tid}")
+                    if other_sel and getattr(other_sel, "value", False):
+                        other_sel.value = False
+            _populate_detail_controls(inputs, tid)
+        else:
+            # Row deselected
+            if _selected_task_id == tid:
+                _selected_task_id = ""
+                _clear_detail_controls(inputs)
+        return
+
+    # ---- Detail-panel assignee change — toggle private checkbox ----
+    if changed.id == "detail_assignee":
+        private_ctrl = inputs.itemById("detail_private")
+        if private_ctrl:
+            selected = getattr(changed, "selectedItem", None)
+            is_assigned = selected is not None and selected.name != "— Unassigned —"
+            private_ctrl.isEnabled = is_assigned
+            if not is_assigned:
+                private_ctrl.value = False
+        return
+
+    # ---- Apply button ----
+    if changed.id == "btn_apply_edits" and getattr(changed, "value", False):
+        changed.value = False  # Reset button immediately
+        tid_to_apply = _selected_task_id
+        _selected_task_id = ""  # Clear before triggering sel_ deselect event
+        if tid_to_apply:
+            _store_pending_edits(inputs, tid_to_apply)
+            sel_input = inputs.itemById(f"sel_{tid_to_apply}")
+            if sel_input:
+                sel_input.value = False
+            _clear_detail_controls(inputs)
+            header = inputs.itemById("detail_header")
+            if header:
+                header.formattedText = (
+                    "Edits applied. Select another row to continue editing."
+                )
+        return
+
+
+# ---------------------------------------------------------------------------
+# Detail-panel helpers
+# ---------------------------------------------------------------------------
+
+
+def _ms_to_hours_str(ms) -> str:
+    """Convert milliseconds to a hours string like '1.5'. Returns '' if falsy."""
+    if not ms:
+        return ""
+    return f"{ms / 3_600_000:.2f}".rstrip("0").rstrip(".")
+
+
+def _get_member_name(assignee_ids: list) -> str:
+    """Return the username of the first assignee ID, or '— Unassigned —'."""
+    if not assignee_ids:
+        return "— Unassigned —"
+    first_id = assignee_ids[0]
+    for member in _list_members:
+        if member["id"] == first_id:
+            return member["username"]
+    return "— Unassigned —"
+
+
+def _populate_detail_controls(inputs: adsk.core.CommandInputs, tid: str) -> None:
+    """Fill the shared detail controls with data for the given task ID.
+
+    Uses _pending_edits if available, otherwise falls back to _task_originals.
+    Enables all detail controls.
+    """
+    if tid in _pending_edits:
+        data = _pending_edits[tid]
+        desc = data.get("desc", "")
+        time_hours = data.get("time_hours", "")
+        assignee_name = data.get("assignee_name", "— Unassigned —")
+        is_private = data.get("is_private", False)
+    else:
+        orig = _task_originals.get(tid, {})
+        desc = (orig.get("description") or "").strip()
+        time_hours = _ms_to_hours_str(orig.get("time_estimate_ms"))
+        assignee_name = _get_member_name(orig.get("assignee_ids", []))
+        is_private = bool(orig.get("is_private", False))
+
+    task_name = _task_originals.get(tid, {}).get("name", tid)
+    header = inputs.itemById("detail_header")
+    if header:
+        header.formattedText = f"<b>Editing:</b> {task_name}"
+
+    desc_ctrl = inputs.itemById("detail_desc")
+    if desc_ctrl:
+        desc_ctrl.formattedText = desc
+        desc_ctrl.isEnabled = True
+
+    time_ctrl = inputs.itemById("detail_time")
+    if time_ctrl:
+        time_ctrl.value = time_hours
+        time_ctrl.isEnabled = True
+
+    assignee_ctrl = inputs.itemById("detail_assignee")
+    if assignee_ctrl:
+        assignee_ctrl.isEnabled = True
+        matched = False
+        for i in range(assignee_ctrl.listItems.count):
+            item = assignee_ctrl.listItems.item(i)
+            is_match = item.name == assignee_name
+            item.isSelected = is_match
+            if is_match:
+                matched = True
+        if not matched and assignee_ctrl.listItems.count > 0:
+            assignee_ctrl.listItems.item(0).isSelected = True
+
+    private_ctrl = inputs.itemById("detail_private")
+    if private_ctrl:
+        is_assigned = assignee_name != "— Unassigned —"
+        private_ctrl.isEnabled = is_assigned
+        private_ctrl.value = is_private if is_assigned else False
+
+    apply_btn = inputs.itemById("btn_apply_edits")
+    if apply_btn:
+        apply_btn.isEnabled = True
+
+
+def _clear_detail_controls(inputs: adsk.core.CommandInputs) -> None:
+    """Reset the shared detail controls to their empty, disabled state."""
+    header = inputs.itemById("detail_header")
+    if header:
+        header.formattedText = "Select a row above to view and edit task details."
+
+    desc_ctrl = inputs.itemById("detail_desc")
+    if desc_ctrl:
+        desc_ctrl.formattedText = ""
+        desc_ctrl.isEnabled = False
+
+    time_ctrl = inputs.itemById("detail_time")
+    if time_ctrl:
+        time_ctrl.value = ""
+        time_ctrl.isEnabled = False
+
+    assignee_ctrl = inputs.itemById("detail_assignee")
+    if assignee_ctrl:
+        assignee_ctrl.isEnabled = False
+        if assignee_ctrl.listItems.count > 0:
+            assignee_ctrl.listItems.item(0).isSelected = True
+
+    private_ctrl = inputs.itemById("detail_private")
+    if private_ctrl:
+        private_ctrl.value = False
+        private_ctrl.isEnabled = False
+
+    apply_btn = inputs.itemById("btn_apply_edits")
+    if apply_btn:
+        apply_btn.value = False
+        apply_btn.isEnabled = False
+
+
+def _store_pending_edits(inputs: adsk.core.CommandInputs, tid: str) -> None:
+    """Read the shared detail controls and store their values in _pending_edits[tid]."""
+    desc_ctrl = inputs.itemById("detail_desc")
+    time_ctrl = inputs.itemById("detail_time")
+    assignee_ctrl = inputs.itemById("detail_assignee")
+    private_ctrl = inputs.itemById("detail_private")
+
+    desc = (getattr(desc_ctrl, "formattedText", "") or "").strip() if desc_ctrl else ""
+    time_hours = getattr(time_ctrl, "value", "").strip() if time_ctrl else ""
+    assignee_name = (
+        assignee_ctrl.selectedItem.name
+        if assignee_ctrl and assignee_ctrl.selectedItem
+        else "— Unassigned —"
+    )
+    is_private = bool(getattr(private_ctrl, "value", False)) if private_ctrl else False
+
+    _pending_edits[tid] = {
+        "desc": desc,
+        "time_hours": time_hours,
+        "assignee_name": assignee_name,
+        "is_private": is_private,
+    }
+    futil.log(f"{CMD_NAME}: Stored pending edits for task '{tid}'.")
 
 
 # ---------------------------------------------------------------------------
@@ -680,6 +1025,46 @@ def _fetch_list_statuses(list_id: str, api_token: str) -> list:
         return statuses
     except Exception as exc:
         futil.log(f"{CMD_NAME}: _fetch_list_statuses — exception: {exc}")
+        return []
+
+
+def _fetch_list_members(list_id: str, api_token: str) -> list:
+    """GET /api/v2/list/{list_id}/member and return a sorted list of user dicts.
+
+    Each returned item has: {"id": int, "username": str, "email": str}.
+    Returns an empty list on any failure.
+    ClickUp docs: https://developer.clickup.com/reference/getlistmembers
+    """
+    url = f"{CLICKUP_API_BASE}/list/{list_id}/member"
+    futil.log(f"{CMD_NAME}: _fetch_list_members — GET '{url}'")
+    try:
+        req = adsk.core.HttpRequest.create(url, adsk.core.HttpMethods.GetMethod)
+        req.setHeader("Authorization", api_token)
+        req.setHeader("Accept", "application/json")
+        response = req.executeSync()
+        futil.log(f"{CMD_NAME}: _fetch_list_members — HTTP {response.statusCode}")
+        if not (200 <= response.statusCode < 300):
+            futil.log(f"{CMD_NAME}: _fetch_list_members — error: {response.data}")
+            return []
+        data = json.loads(response.data)
+        members = []
+        for item in data.get("members", []):
+            # API may return flat dicts or dicts nested under "user"
+            user = item.get("user", item)
+            uid = user.get("id")
+            if not uid:
+                continue
+            members.append(
+                {
+                    "id": int(uid),
+                    "username": (user.get("username") or user.get("email") or str(uid)),
+                    "email": user.get("email", ""),
+                }
+            )
+        members.sort(key=lambda m: m["username"].lower())
+        return members
+    except Exception as exc:
+        futil.log(f"{CMD_NAME}: _fetch_list_members — exception: {exc}")
         return []
 
 

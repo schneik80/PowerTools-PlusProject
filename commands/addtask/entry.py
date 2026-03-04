@@ -44,6 +44,10 @@ PROJECTS_JSON_PATH = os.path.join(CACHE_DIR, "projects.json")
 # they are not released and garbage collected.
 local_handlers = []
 
+# Module-level cache of list members fetched during command_created so they are
+# available by index when command_execute resolves the selected dropdown item.
+_list_members: list = []  # [{"id": int, "username": str, "email": str}, ...]
+
 
 def start():
     """Executed when add-in is run."""
@@ -120,6 +124,29 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
         # without opening the input form.
         args.command.isAutoExecute = True
         return
+
+    # ------------------------------------------------------------------ #
+    # Pre-fetch list members for the assignee dropdown (best-effort)      #
+    # ------------------------------------------------------------------ #
+    global _list_members
+    _list_members = []
+    try:
+        _api_token_early = _load_api_token()
+        _doc_early = app.activeDocument
+        _data_file_early = _doc_early.dataFile if _doc_early else None
+        _proj_early = _data_file_early.parentProject if _data_file_early else None
+        _proj_urn_early = _proj_early.id if _proj_early else None
+        if _api_token_early and _proj_urn_early:
+            _list_id_early = _load_list_id_for_project(_proj_urn_early)
+            if _list_id_early:
+                _list_members = _fetch_list_members(_list_id_early, _api_token_early)
+                futil.log(
+                    f"{CMD_NAME}: command_created — fetched {len(_list_members)} member(s)."
+                )
+    except Exception as _exc:
+        futil.log(
+            f"{CMD_NAME}: command_created — member prefetch failed (non-fatal): {_exc}"
+        )
 
     inputs = args.command.commandInputs
 
@@ -210,6 +237,33 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
         "Requires a TinyURL API token configured in Set Tokens."
     )
 
+    # Assign To — drop-down populated from the ClickUp list members API
+    assignee_input = inputs.addDropDownCommandInput(
+        "task_assignee", "Assign To:", adsk.core.DropDownStyles.TextListDropDownStyle
+    )
+    assignee_input.tooltip = "Assign To"
+    assignee_input.tooltipDescription = (
+        "Optionally assign the new task to a list member.\n"
+        "Select '— Unassigned —' to leave the task unassigned.\n"
+        "(Populated from the ClickUp list members.)"
+    )
+    assignee_input.listItems.add("— Unassigned —", True)
+    for _member in _list_members:
+        assignee_input.listItems.add(_member["username"], False)
+
+    # Private Task — checkbox; only enabled when an assignee is selected
+    # (ClickUp private tasks require at least one assignee to be meaningful)
+    private_input = inputs.addBoolValueInput(
+        "task_private", "Private Task", True, "", False
+    )
+    private_input.tooltip = "Private Task"
+    private_input.tooltipDescription = (
+        "When checked, the task is marked as private in ClickUp. "
+        "Private tasks are only visible to the task creator and assignees. "
+        "Select an assignee above to enable this option."
+    )
+    private_input.isEnabled = False  # disabled until an assignee is chosen
+
     # Connect to command events
     futil.add_handler(
         args.command.execute, command_execute, local_handlers=local_handlers
@@ -244,6 +298,8 @@ def command_execute(args: adsk.core.CommandEventArgs):
         date_input = inputs.itemById("task_due_date")
         priority_input = inputs.itemById("task_priority")
         link_doc_input = inputs.itemById("link_document")
+        private_input = inputs.itemById("task_private")
+        assignee_input = inputs.itemById("task_assignee")
 
         task_name = getattr(name_input, "value", "").strip()
         task_description = getattr(desc_input, "text", "").strip()
@@ -254,13 +310,23 @@ def command_execute(args: adsk.core.CommandEventArgs):
             else "Normal"
         )
         link_document = getattr(link_doc_input, "value", False)
+        task_private = getattr(private_input, "value", False)
+
+        # Resolve assignee: look up selected username in cached _list_members
+        assignee_id = 0  # 0 = unassigned
+        if assignee_input and assignee_input.selectedItem:
+            selected_name = assignee_input.selectedItem.name
+            for _m in _list_members:
+                if _m["username"] == selected_name:
+                    assignee_id = _m["id"]
+                    break
 
         # Map label → ClickUp priority integer
         _PRIORITY_MAP = {"Low": 4, "Normal": 3, "High": 2, "Urgent": 1}
         priority_value = _PRIORITY_MAP.get(priority_label, 3)
 
         futil.log(
-            f"{CMD_NAME}: Inputs collected — name='{task_name}', due='{due_date_str}', priority='{priority_label}'({priority_value}), link_document={link_document}"
+            f"{CMD_NAME}: Inputs collected — name='{task_name}', due='{due_date_str}', priority='{priority_label}'({priority_value}), link_document={link_document}, private={task_private}, assignee_id={assignee_id}"
         )
 
         # ------------------------------------------------------------------ #
@@ -368,7 +434,13 @@ def command_execute(args: adsk.core.CommandEventArgs):
         payload: dict = {
             "name": task_name,
             "priority": priority_value,
+            "is_private": task_private,
         }
+
+        # Add assignee if one was selected (ClickUp create task takes an array of IDs)
+        if assignee_id:
+            payload["assignees"] = [assignee_id]
+            futil.log(f"{CMD_NAME}: Assigning task to user ID {assignee_id}.")
 
         # Use markdown_content if a description was provided (overrides plain description)
         if task_description:
@@ -539,8 +611,22 @@ def command_validate_input(args: adsk.core.ValidateInputsEventArgs):
 
 
 def command_input_changed(args: adsk.core.InputChangedEventArgs):
-    """Handles date shortcut button row clicks — calculates and fills the due date field."""
+    """Handles input changes: date shortcuts fill the due-date field;
+    the assignee dropdown enables/disables the private-task checkbox.
+    """
     changed = args.input
+
+    # ---- Assignee → toggle private checkbox ----
+    if changed.id == "task_assignee":
+        private_input = args.inputs.itemById("task_private")
+        if private_input is not None:
+            selected = getattr(changed, "selectedItem", None)
+            is_assigned = selected is not None and selected.name != "— Unassigned —"
+            private_input.isEnabled = is_assigned
+            if not is_assigned:
+                private_input.value = False
+        return
+
     if changed.id not in ("btn_row_tomorrow", "btn_row_eow", "btn_row_1w"):
         return
 
@@ -589,6 +675,45 @@ def _next_business_day(dt: datetime) -> datetime:
     elif weekday == 6:  # Sunday → Monday
         dt += timedelta(days=1)
     return dt
+
+
+def _fetch_list_members(list_id: str, api_token: str) -> list:
+    """GET /api/v2/list/{list_id}/member and return a sorted list of user dicts.
+
+    Each returned item has: {"id": int, "username": str, "email": str}.
+    Returns an empty list on any failure.
+    ClickUp docs: https://developer.clickup.com/reference/getlistmembers
+    """
+    url = f"{CLICKUP_API_BASE}/list/{list_id}/member"
+    futil.log(f"{CMD_NAME}: _fetch_list_members — GET '{url}'")
+    try:
+        req = adsk.core.HttpRequest.create(url, adsk.core.HttpMethods.GetMethod)
+        req.setHeader("Authorization", api_token)
+        req.setHeader("Accept", "application/json")
+        response = req.executeSync()
+        futil.log(f"{CMD_NAME}: _fetch_list_members — HTTP {response.statusCode}")
+        if not (200 <= response.statusCode < 300):
+            futil.log(f"{CMD_NAME}: _fetch_list_members — error: {response.data}")
+            return []
+        data = json.loads(response.data)
+        members = []
+        for item in data.get("members", []):
+            user = item.get("user", item)
+            uid = user.get("id")
+            if not uid:
+                continue
+            members.append(
+                {
+                    "id": int(uid),
+                    "username": (user.get("username") or user.get("email") or str(uid)),
+                    "email": user.get("email", ""),
+                }
+            )
+        members.sort(key=lambda m: m["username"].lower())
+        return members
+    except Exception as exc:
+        futil.log(f"{CMD_NAME}: _fetch_list_members — exception: {exc}")
+        return []
 
 
 def _load_api_token() -> str:

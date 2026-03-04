@@ -49,7 +49,7 @@ _api_token: str = ""
 _list_statuses: list = []  # [{"status": str, "color": str, ...}, ...] from ClickUp API
 _task_originals: dict = (
     {}
-)  # "{id_prefix}_{task_id}" → {"status": str, "priority": int|None}
+)  # "{id_prefix}_{task_id}" → {"status": str, "priority": int|None, "description": str, "time_estimate_ms": int|None}
 
 
 def start():
@@ -342,10 +342,19 @@ def _build_task_table(
                 pass
 
         status_str = task.get("status", {}).get("status", "").lower()
+        description_str = (task.get("description") or "").strip()
+        try:
+            time_est_ms = (
+                int(task["time_estimate"]) if task.get("time_estimate") else None
+            )
+        except (ValueError, TypeError):
+            time_est_ms = None
         if task_originals is not None:
             task_originals[f"{id_prefix}_{tid}"] = {
                 "status": status_str,
                 "priority": priority_id,
+                "description": description_str,
+                "time_estimate_ms": time_est_ms,
             }
 
         name_html = f'<a href="{task_url}">{task_name}</a>' if task_url else task_name
@@ -398,8 +407,60 @@ def _build_task_table(
     return table
 
 
+def _build_description_inputs(
+    inputs: adsk.core.CommandInputs,
+    tasks: list,
+    id_prefix: str,
+) -> None:
+    """Add an editable description TextBox and time estimate field for each task.
+
+    Description inputs are named "{id_prefix}_desc_{task_id}".
+    Time estimate inputs are named "{id_prefix}_time_{task_id}" (value in hours).
+    """
+    if not tasks:
+        return
+    inputs.addTextBoxCommandInput(
+        f"{id_prefix}_desc_header",
+        "",
+        "<b>Descriptions &amp; Time Estimates</b>",
+        1,
+        True,
+    )
+    for task in tasks:
+        tid = task.get("id", "")
+        if not tid:
+            continue
+        task_name = task.get("name", "(unnamed)")
+        description = (task.get("description") or "").strip()
+        desc_cell = inputs.addTextBoxCommandInput(
+            f"{id_prefix}_desc_{tid}",
+            task_name,
+            description,
+            4,
+            False,
+        )
+        desc_cell.tooltip = "Description"
+        desc_cell.tooltipDescription = "Edit the task description. Click OK to save."
+
+        # Time estimate — stored in ms by ClickUp, displayed/entered in hours
+        try:
+            est_ms = int(task["time_estimate"]) if task.get("time_estimate") else None
+        except (ValueError, TypeError):
+            est_ms = None
+        est_str = f"{est_ms / 3_600_000:.2f}".rstrip("0").rstrip(".") if est_ms else ""
+        time_cell = inputs.addStringValueInput(
+            f"{id_prefix}_time_{tid}",
+            "Est. Hours",
+            est_str,
+        )
+        time_cell.tooltip = "Time Estimate (hours)"
+        time_cell.tooltipDescription = (
+            "Enter the estimated time in hours (e.g. 1.5). Leave blank to clear."
+        )
+
+
 def command_execute(args: adsk.core.CommandEventArgs):
-    """OK was clicked — PATCH any changed priority or status fields to ClickUp."""
+    """OK was clicked — PATCH any changed priority, status, or description fields to ClickUp."""
     futil.log(f"{CMD_NAME}: Execute — scanning for changed fields.")
 
     inputs = args.command.commandInputs
@@ -433,6 +494,29 @@ def command_execute(args: adsk.core.CommandEventArgs):
             if new_status and new_status != original.get("status", ""):
                 payload["status"] = new_status
                 futil.log(f"{CMD_NAME}: [{task_id}] status changed → '{new_status}'")
+
+        # ---- Description ----
+        desc_input = inputs.itemById(f"{prefix}_desc_{task_id}")
+        if desc_input is not None:
+            new_desc = (getattr(desc_input, "formattedText", "") or "").strip()
+            if new_desc != (original.get("description", "") or "").strip():
+                payload["description"] = new_desc
+                futil.log(f"{CMD_NAME}: [{task_id}] description changed")
+
+        # ---- Time estimate ----
+        time_input = inputs.itemById(f"{prefix}_time_{task_id}")
+        if time_input is not None:
+            raw_val = getattr(time_input, "value", "").strip()
+            try:
+                new_est_ms = int(float(raw_val) * 3_600_000) if raw_val else 0
+            except ValueError:
+                new_est_ms = original.get("time_estimate_ms") or 0
+            orig_est_ms = original.get("time_estimate_ms") or 0
+            if new_est_ms != orig_est_ms:
+                payload["time_estimate"] = new_est_ms
+                futil.log(
+                    f"{CMD_NAME}: [{task_id}] time_estimate changed → {new_est_ms}ms"
+                )
 
         if not payload:
             continue
