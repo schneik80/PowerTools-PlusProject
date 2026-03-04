@@ -21,9 +21,9 @@ WORKSPACE_ID = config.design_workspace
 TAB_ID = config.tools_tab_id
 TAB_NAME = config.my_tab_name
 
-PANEL_ID = config.my_panel_id
-PANEL_NAME = config.my_panel_name
-PANEL_AFTER = config.my_panel_after
+PANEL_ID = config.clickup_panel_id
+PANEL_NAME = config.clickup_panel_name
+PANEL_AFTER = config.clickup_panel_after
 
 ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "")
 

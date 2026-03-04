@@ -17,6 +17,10 @@ my_panel_id = f"PT_{my_tab_name}"
 my_panel_name = "Power Tools"
 my_panel_after = ""
 
+clickup_panel_id = "PT_ClickUp"
+clickup_panel_name = "ClickUp"
+clickup_panel_after = ""
+
 # Cache folder (holds projects.json, auth.json, etc.)
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 

@@ -12,9 +12,7 @@ ui = app.userInterface
 # Command identity information
 CMD_ID = f"{config.COMPANY_NAME}_{config.ADDIN_NAME}_openClickUp"
 CMD_NAME = "Open ClickUp"
-CMD_Description = (
-    "Open the ClickUp project associated with the current Fusion document"
-)
+CMD_Description = "Open the ClickUp project associated with the current Fusion document"
 
 # Specify that the command will be promoted to the panel
 IS_PROMOTED = True
@@ -22,9 +20,9 @@ WORKSPACE_ID = config.design_workspace
 TAB_ID = config.tools_tab_id
 TAB_NAME = config.my_tab_name
 
-PANEL_ID = config.my_panel_id
-PANEL_NAME = config.my_panel_name
-PANEL_AFTER = config.my_panel_after
+PANEL_ID = config.clickup_panel_id
+PANEL_NAME = config.clickup_panel_name
+PANEL_AFTER = config.clickup_panel_after
 
 # Resource location for command icons
 ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "")
@@ -110,7 +108,10 @@ def command_execute(args: adsk.core.CommandEventArgs):
         # Get the data file (this contains the project information)
         data_file = doc.dataFile
         if not data_file:
-            ui.messageBox("Please open a saved Fusion document in a project mapped to Clickup.", "Error")
+            ui.messageBox(
+                "Please open a saved Fusion document in a project mapped to Clickup.",
+                "Error",
+            )
             return
 
         # Get the project that contains this document
