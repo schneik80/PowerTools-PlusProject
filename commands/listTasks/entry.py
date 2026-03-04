@@ -202,9 +202,11 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
         return False
 
     doc_tasks = [t for t in doc_tasks_raw if _urn_matches(t)]
+    doc_task_ids = {t.get("id") for t in doc_tasks}
+    all_tasks = [t for t in all_tasks if t.get("id") not in doc_task_ids]
     futil.log(
         f"{CMD_NAME}: {len(doc_tasks_raw)} API result(s) → {len(doc_tasks)} "
-        f"exact URN match(es); {len(all_tasks)} total in list."
+        f"exact URN match(es); {len(all_tasks)} remaining project task(s) after exclusion."
     )
 
     def _priority_sort_key(task):
