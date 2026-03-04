@@ -336,9 +336,8 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
         "Select an assignee above to enable this option."
     )
 
-    apply_btn = inputs.addBoolValueInput(
-        "btn_apply_edits", "Apply Edits to Selected Row", True, "", False
-    )
+    apply_btn = inputs.addBoolValueInput("btn_apply_edits", "Apply", False, "", False)
+    apply_btn.isFullWidth = True
     apply_btn.isEnabled = False
     apply_btn.tooltip = "Apply Edits"
     apply_btn.tooltipDescription = "Save the detail-panel edits for the selected task and return the panel to its empty state."
