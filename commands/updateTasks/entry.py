@@ -761,6 +761,11 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
         _selected_task_id = ""  # Clear before triggering sel_ deselect event
         if tid_to_apply:
             _store_pending_edits(inputs, tid_to_apply)
+            # Refresh the read-only time estimate cell in the table to reflect the edit
+            time_hours = _pending_edits.get(tid_to_apply, {}).get("time_hours", "")
+            time_cell = inputs.itemById(f"time_{tid_to_apply}")
+            if time_cell:
+                time_cell.value = time_hours if time_hours else "—"
             sel_input = inputs.itemById(f"sel_{tid_to_apply}")
             if sel_input:
                 sel_input.value = False
