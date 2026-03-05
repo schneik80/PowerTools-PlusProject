@@ -1,7 +1,10 @@
 import adsk.core
 import adsk.fusion
+import http.client
 import json
 import os
+import tempfile
+import time
 from datetime import datetime, timedelta
 from urllib.parse import quote
 
@@ -553,6 +556,14 @@ def command_execute(args: adsk.core.CommandEventArgs):
                         f"{CMD_NAME}: [URN] WARNING — failed to write 'Fusion Document URN' field."
                     )
 
+            # ------------------------------------------------------------------ #
+            # 5c. Attach document thumbnail when Link Document is enabled        #
+            # DataFile.thumbnail → DataObjectFuture → 256×256 PNG attachment       #
+            # ------------------------------------------------------------------ #
+            if link_document and task_id and data_file:
+                futil.log(f"{CMD_NAME}: [Thumbnail] Attaching document thumbnail to task '{task_id}'.")
+                _attach_thumbnail_to_task(task_id, data_file, api_token)
+
             ui.messageBox(
                 f"Task <b>{task_name}</b> created.<br>"
                 f"Priority: {priority_label}<br><br>"
@@ -946,6 +957,119 @@ def _get_url_custom_field_id(list_id: str, api_token: str) -> str:
     except Exception as exc:
         futil.log(f"{CMD_NAME}: _get_url_custom_field_id — exception: {exc}")
         return ""
+
+
+def _attach_thumbnail_to_task(task_id: str, data_file, api_token: str) -> None:
+    """Download the DataFile thumbnail and upload it to the ClickUp task as an attachment.
+
+    Uses DataFile.thumbnail to start an async download (returns a DataObjectFuture),
+    polls until the 256×256 PNG is ready, saves it to a temp file, then POSTs it
+    to the ClickUp attachment endpoint as multipart/form-data.
+
+    Uses http.client.HTTPSConnection (instead of adsk.core.HttpRequest) so the
+    body is sent as raw bytes — adsk.core.HttpRequest.data is a string and would
+    re-encode the binary PNG as UTF-8, corrupting byte values above 0x7F.
+
+    All failures are logged but do not raise — thumbnail attachment is best-effort.
+
+    ClickUp API: POST /api/v2/task/{task_id}/attachment
+    """
+    futil.log(f"{CMD_NAME}: [Thumbnail] Starting thumbnail fetch for task '{task_id}'.")
+    tmp_path = None
+    try:
+        # 1. Start async thumbnail download
+        future = data_file.thumbnail
+        if future is None:
+            futil.log(f"{CMD_NAME}: [Thumbnail] data_file.thumbnail returned None — skipping.")
+            return
+
+        # 2. Poll until the download leaves the running state (max 10 s)
+        MAX_WAIT = 10.0
+        POLL_INTERVAL = 0.1
+        elapsed = 0.0
+        while elapsed < MAX_WAIT:
+            try:
+                if future.state != adsk.core.FutureStates.RunningFutureState:
+                    break
+            except AttributeError:
+                # FutureStates enum path differs — wait a moment and continue
+                time.sleep(1.0)
+                break
+            time.sleep(POLL_INTERVAL)
+            elapsed += POLL_INTERVAL
+
+        futil.log(f"{CMD_NAME}: [Thumbnail] Wait ended after {elapsed:.1f}s (state={future.state}).")
+
+        data_obj = future.dataObject
+        if data_obj is None:
+            futil.log(
+                f"{CMD_NAME}: [Thumbnail] dataObject is None — "
+                "no thumbnail available for this document."
+            )
+            return
+
+        # 3. Save PNG to a temp file
+        tmp_path = os.path.join(
+            tempfile.gettempdir(), f"fpp_thumb_{task_id}.png"
+        )
+        if not data_obj.saveToFile(tmp_path):
+            futil.log(f"{CMD_NAME}: [Thumbnail] saveToFile returned False — skipping.")
+            return
+
+        futil.log(f"{CMD_NAME}: [Thumbnail] Thumbnail saved to '{tmp_path}' ({os.path.getsize(tmp_path)} bytes).")
+
+        # 4. Read the PNG bytes
+        with open(tmp_path, "rb") as fh:
+            image_bytes = fh.read()
+
+        # 5. Build multipart/form-data body as bytes (preserves all 256 byte values)
+        boundary = b"----FusionAddInBoundary3c1f9e"
+        safe_name = (data_file.name.replace(" ", "_") + "_thumbnail.png").encode("utf-8")
+
+        body = (
+            b"--" + boundary + b"\r\n"
+            b'Content-Disposition: form-data; name="attachment"; filename="' + safe_name + b'"\r\n'
+            b"Content-Type: image/png\r\n"
+            b"\r\n"
+            + image_bytes
+            + b"\r\n--" + boundary + b"--\r\n"
+        )
+
+        content_type = b"multipart/form-data; boundary=" + boundary
+
+        # 6. POST via http.client so the body is sent as raw bytes
+        #    (adsk.core.HttpRequest.data is a string and would corrupt binary data)
+        conn = http.client.HTTPSConnection("api.clickup.com", timeout=30)
+        conn.request(
+            "POST",
+            f"/api/v2/task/{task_id}/attachment",
+            body=body,
+            headers={
+                "Authorization": api_token,
+                "Content-Type": content_type.decode("ascii"),
+                "Accept": "application/json",
+                "Content-Length": str(len(body)),
+            },
+        )
+        resp = conn.getresponse()
+        status = resp.status
+        resp_body = resp.read().decode("utf-8", errors="replace")
+        conn.close()
+
+        futil.log(f"{CMD_NAME}: [Thumbnail] Attachment upload — HTTP {status}")
+        if 200 <= status < 300:
+            futil.log(f"{CMD_NAME}: [Thumbnail] Thumbnail attached successfully.")
+        else:
+            futil.log(f"{CMD_NAME}: [Thumbnail] Upload failed: {resp_body}")
+
+    except Exception as exc:
+        futil.log(f"{CMD_NAME}: [Thumbnail] Exception — {exc}")
+    finally:
+        if tmp_path and os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 
 def _set_task_custom_field(
