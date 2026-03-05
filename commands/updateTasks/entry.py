@@ -2,7 +2,7 @@ import adsk.core
 import adsk.fusion
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
 from ...lib import fusionAddInUtils as futil
@@ -53,6 +53,7 @@ _list_statuses: list = []  # [{"status": str, "color": str}, ...]
 _list_members: list = []  # [{"id": int, "username": str, "email": str}, ...]
 _selected_task_id: str = ""  # task ID of the currently selected table row
 _pending_edits: dict = {}  # task_id → {desc, time_hours, assignee_name, is_private}
+_quick_date_values: list = []  # parallel list of date values for the Quick Date dropdown
 
 
 def start():
@@ -311,6 +312,23 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
         "Enter the estimated time in hours (e.g. 1.5). Leave blank to clear."
     )
 
+    global _quick_date_values
+    _quick_date_options = _compute_quick_dates()
+    _quick_date_values = [v for _, v in _quick_date_options]
+    quick_date_ctrl = inputs.addDropDownCommandInput(
+        "detail_quick_date",
+        "Quick Due Date",
+        adsk.core.DropDownStyles.TextListDropDownStyle,
+    )
+    quick_date_ctrl.isEnabled = False
+    quick_date_ctrl.tooltip = "Quick Due Date"
+    quick_date_ctrl.tooltipDescription = (
+        "Select a preset to automatically fill the Due Date in the table for this task.\n"
+        "Dates falling on a weekend are advanced to the following Monday."
+    )
+    for label, _ in _quick_date_options:
+        quick_date_ctrl.listItems.add(label, False)
+
     assignee_ctrl = inputs.addDropDownCommandInput(
         "detail_assignee",
         "Assignee",
@@ -378,7 +396,7 @@ def _build_editable_task_table(
     """
     if status_options is None:
         status_options = []
-    table = inputs.addTableCommandInput("tasks_table", "", 5, "1:5:3:2:2")
+    table = inputs.addTableCommandInput("tasks_table", "", 6, "1:5:3:2:2:2")
     table.hasGrid = True
     table.minimumVisibleRows = 3
     table.maximumVisibleRows = 15
@@ -391,6 +409,7 @@ def _build_editable_task_table(
         ("h_due", "Due Date"),
         ("h_priority", "Priority"),
         ("h_status", "Status"),
+        ("h_time", "Time Est."),
     ]:
         cell = inputs.addStringValueInput(col_id, "", label)
         cell.isReadOnly = True
@@ -400,12 +419,13 @@ def _build_editable_task_table(
     table.addCommandInput(inputs.itemById("h_due"), 0, 2)
     table.addCommandInput(inputs.itemById("h_priority"), 0, 3)
     table.addCommandInput(inputs.itemById("h_status"), 0, 4)
+    table.addCommandInput(inputs.itemById("h_time"), 0, 5)
 
     if not tasks:
         empty = inputs.addTextBoxCommandInput(
             "tasks_empty", "", "No tasks linked to this document.", 1, True
         )
-        table.addCommandInput(empty, 1, 0, 0, 5)
+        table.addCommandInput(empty, 1, 0, 0, 6)
         return
 
     for i, task in enumerate(tasks, start=1):
@@ -434,6 +454,13 @@ def _build_editable_task_table(
 
         # Status — current value (lowercase to match ClickUp API)
         status_str = task.get("status", {}).get("status", "").lower()
+
+        # Time estimate — ms → hours string
+        try:
+            time_est_ms = int(task["time_estimate"]) if task.get("time_estimate") else None
+        except (ValueError, TypeError):
+            time_est_ms = None
+        time_str = _ms_to_hours_str(time_est_ms) if time_est_ms else ""
 
         # Select checkbox — col 0
         sel_cell = inputs.addBoolValueInput(f"sel_{tid}", "", True, "", False)
@@ -493,11 +520,20 @@ def _build_editable_task_table(
             status_cell.tooltip = "Status"
             status_cell.tooltipDescription = "Status could not be fetched from ClickUp."
 
+        # Time estimate cell — read-only display; select row to edit in the detail panel — col 5
+        time_cell = inputs.addStringValueInput(f"time_{tid}", "", time_str or "—")
+        time_cell.isReadOnly = True
+        time_cell.tooltip = "Time Estimate"
+        time_cell.tooltipDescription = (
+            "Estimated time in hours. Select this row to edit the time estimate in the detail panel below."
+        )
+
         table.addCommandInput(sel_cell, i, 0)
         table.addCommandInput(name_cell, i, 1)
         table.addCommandInput(due_cell, i, 2)
         table.addCommandInput(pri_cell, i, 3)
         table.addCommandInput(status_cell, i, 4)
+        table.addCommandInput(time_cell, i, 5)
 
 
 def command_execute(args: adsk.core.CommandEventArgs):
@@ -706,6 +742,18 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
                 private_ctrl.value = False
         return
 
+    # ---- Quick Date preset — fills Due Date cell for the selected task ----
+    if changed.id == "detail_quick_date":
+        selected = getattr(changed, "selectedItem", None)
+        if selected is not None and _selected_task_id:
+            idx = selected.index
+            if 0 <= idx < len(_quick_date_values):
+                due_input = inputs.itemById(f"due_{_selected_task_id}")
+                if due_input:
+                    # Strip any time component so the table cell shows YYYY-MM-DD
+                    due_input.value = _quick_date_values[idx].split(" ")[0]
+        return
+
     # ---- Apply button ----
     if changed.id == "btn_apply_edits" and getattr(changed, "value", False):
         changed.value = False  # Reset button immediately
@@ -801,6 +849,10 @@ def _populate_detail_controls(inputs: adsk.core.CommandInputs, tid: str) -> None
         private_ctrl.isEnabled = is_assigned
         private_ctrl.value = is_private if is_assigned else False
 
+    quick_date_ctrl = inputs.itemById("detail_quick_date")
+    if quick_date_ctrl:
+        quick_date_ctrl.isEnabled = True
+
     apply_btn = inputs.itemById("btn_apply_edits")
     if apply_btn:
         apply_btn.isEnabled = True
@@ -833,6 +885,13 @@ def _clear_detail_controls(inputs: adsk.core.CommandInputs) -> None:
         private_ctrl.value = False
         private_ctrl.isEnabled = False
 
+    quick_date_ctrl = inputs.itemById("detail_quick_date")
+    if quick_date_ctrl:
+        quick_date_ctrl.isEnabled = False
+        if quick_date_ctrl.listItems.count > 0:
+            for i in range(quick_date_ctrl.listItems.count):
+                quick_date_ctrl.listItems.item(i).isSelected = False
+
     apply_btn = inputs.itemById("btn_apply_edits")
     if apply_btn:
         apply_btn.value = False
@@ -862,6 +921,100 @@ def _store_pending_edits(inputs: adsk.core.CommandInputs, tid: str) -> None:
         "is_private": is_private,
     }
     futil.log(f"{CMD_NAME}: Stored pending edits for task '{tid}'.")
+
+
+# ---------------------------------------------------------------------------
+# Quick-date helpers (mirrored from addtask)
+# ---------------------------------------------------------------------------
+
+
+def _next_business_day(dt: datetime) -> datetime:
+    """Return *dt* unchanged if it is a weekday (Mon–Fri).
+    If it falls on Saturday, advance to the following Monday (+2 days).
+    If it falls on Sunday, advance to Monday (+1 day).
+    """
+    weekday = dt.weekday()  # 0 = Monday … 6 = Sunday
+    if weekday == 5:  # Saturday → Monday
+        dt += timedelta(days=2)
+    elif weekday == 6:  # Sunday → Monday
+        dt += timedelta(days=1)
+    return dt
+
+
+def _compute_quick_dates() -> list:
+    """Pre-calculate quick-date options relative to *now*.
+
+    Returns a list of (display_label, date_value) tuples where date_value is
+    either 'YYYY-MM-DD' (date-only) or 'YYYY-MM-DD HH:MM' (for Later).
+    Weekend adjustments are applied where appropriate.
+    """
+    now = datetime.now()
+
+    def _fmt(dt):
+        return f"{dt.strftime('%a')} {dt.day} {dt.strftime('%b')}"
+
+    results = []
+
+    # 1. Today
+    results.append((
+        f"Today \u2014 {now.strftime('%a')}",
+        now.strftime("%Y-%m-%d"),
+    ))
+
+    # 2. Later (now + 2 hours)
+    later = now + timedelta(hours=2)
+    hour_12 = int(later.strftime("%I"))
+    ampm = later.strftime("%p").lower()
+    results.append((
+        f"Later \u2014 {hour_12}:{later.strftime('%M')} {ampm}",
+        later.strftime("%Y-%m-%d %H:%M"),
+    ))
+
+    # 3. Tomorrow — next business day
+    tomorrow = _next_business_day(now + timedelta(days=1))
+    results.append((
+        f"Tomorrow \u2014 {tomorrow.strftime('%a')}",
+        tomorrow.strftime("%Y-%m-%d"),
+    ))
+
+    # 4. End of Week — this Friday; if Sat/Sun, next Friday
+    days_to_eow = (4 - now.weekday()) % 7
+    eow = now + timedelta(days=days_to_eow)
+    results.append((
+        f"End of Week \u2014 {_fmt(eow)}",
+        eow.strftime("%Y-%m-%d"),
+    ))
+
+    # 5. Next Week — coming Monday
+    days_to_monday = ((7 - now.weekday()) % 7) or 7
+    next_mon = now + timedelta(days=days_to_monday)
+    results.append((
+        f"Next Week \u2014 {_fmt(next_mon)}",
+        next_mon.strftime("%Y-%m-%d"),
+    ))
+
+    # 6. Next Friday
+    next_fri = eow + timedelta(days=7)
+    results.append((
+        f"Next Friday \u2014 {_fmt(next_fri)}",
+        next_fri.strftime("%Y-%m-%d"),
+    ))
+
+    # 7. 2 Weeks — today + 14 days, weekend-adjusted
+    two_wk = _next_business_day(now + timedelta(days=14))
+    results.append((
+        f"2 Weeks \u2014 {_fmt(two_wk)}",
+        two_wk.strftime("%Y-%m-%d"),
+    ))
+
+    # 8. 4 Weeks — today + 28 days, weekend-adjusted
+    four_wk = _next_business_day(now + timedelta(days=28))
+    results.append((
+        f"4 Weeks \u2014 {four_wk.day} {four_wk.strftime('%b')}",
+        four_wk.strftime("%Y-%m-%d"),
+    ))
+
+    return results
 
 
 # ---------------------------------------------------------------------------
