@@ -48,6 +48,10 @@ local_handlers = []
 # available by index when command_execute resolves the selected dropdown item.
 _list_members: list = []  # [{"id": int, "username": str, "email": str}, ...]
 
+# Module-level list of pre-calculated quick-date values (YYYY-MM-DD or YYYY-MM-DD HH:MM),
+# parallel to the Quick Date dropdown items built in command_created.
+_quick_date_values: list = []
+
 
 def start():
     """Executed when add-in is run."""
@@ -170,44 +174,26 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     # Due date — single-line string input in YYYY-MM-DD format
     today = datetime.now().strftime("%Y-%m-%d")
     due_input = inputs.addStringValueInput(
-        "task_due_date", "Due Date (YYYY-MM-DD):", today
+        "task_due_date", "Due Date:", today
     )
     due_input.tooltip = "Due Date"
-    due_input.tooltipDescription = "Enter the task due date in YYYY-MM-DD format, or use the shortcut buttons below to fill it automatically."
+    due_input.tooltipDescription = "Enter the task due date in YYYY-MM-DD format, or select a Quick Date preset to fill it automatically."
 
-    # Three individual button rows so each button has its own unique tooltip.
-    # (ListItem does not support tooltip/tooltipDescription; the CommandInput does.)
-    _res = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources")
+    # Quick Date — pre-calculated combo box (no icons)
+    global _quick_date_values
+    _quick_date_options = _compute_quick_dates()
+    _quick_date_values = [v for _, v in _quick_date_options]
 
-    btn_row_tmr = inputs.addButtonRowCommandInput(
-        "btn_row_tomorrow", "Quick Date", False
+    quick_date_input = inputs.addDropDownCommandInput(
+        "quick_date", "Quick Date:", adsk.core.DropDownStyles.TextListDropDownStyle
     )
-    btn_row_tmr.tooltip = "Tomorrow"
-    btn_row_tmr.tooltipDescription = (
-        "Sets the due date to <b>tomorrow</b>.<br>"
-        "If tomorrow falls on a Saturday or Sunday the date is advanced "
-        "to the following <b>Monday</b>."
+    quick_date_input.tooltip = "Quick Date"
+    quick_date_input.tooltipDescription = (
+        "Select a preset date to automatically fill in the Due Date field.\n"
+        "Dates falling on a weekend are advanced to the following Monday."
     )
-    btn_row_tmr.listItems.add("Tomorrow", False, os.path.join(_res, "btn_tomorrow"))
-
-    btn_row_eow = inputs.addButtonRowCommandInput("btn_row_eow", " ", False)
-    btn_row_eow.tooltip = "End of Week"
-    btn_row_eow.tooltipDescription = (
-        "Sets the due date to <b>this Friday</b>.<br>"
-        "If today is Saturday or Sunday the date is set to <b>next Friday</b>."
-    )
-    btn_row_eow.listItems.add(
-        "End of Week", False, os.path.join(_res, "btn_end_of_week")
-    )
-
-    btn_row_1w = inputs.addButtonRowCommandInput("btn_row_1w", " ", False)
-    btn_row_1w.tooltip = "In 1 Week"
-    btn_row_1w.tooltipDescription = (
-        "Sets the due date to <b>today + 7 days</b>.<br>"
-        "If that date falls on a Saturday or Sunday it is advanced "
-        "to the following <b>Monday</b>."
-    )
-    btn_row_1w.listItems.add("In 1 Week", False, os.path.join(_res, "btn_in_1_week"))
+    for label, _ in _quick_date_options:
+        quick_date_input.listItems.add(label, False)
 
     # Priority — drop-down (ClickUp values: 1=Urgent, 2=High, 3=Normal, 4=Low)
     priority_input = inputs.addDropDownCommandInput(
@@ -451,7 +437,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
             due_ms = _date_to_unix_ms(due_date_str)
             if due_ms is not None:
                 payload["due_date"] = due_ms
-                payload["due_date_time"] = False  # date only, no specific time
+                payload["due_date_time"] = " " in due_date_str  # True when HH:MM present (Later)
                 futil.log(f"{CMD_NAME}: Due date '{due_date_str}' → {due_ms} ms.")
             else:
                 futil.log(
@@ -627,28 +613,15 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
                 private_input.value = False
         return
 
-    if changed.id not in ("btn_row_tomorrow", "btn_row_eow", "btn_row_1w"):
+    if changed.id == "quick_date":
+        selected = getattr(changed, "selectedItem", None)
+        if selected is not None:
+            idx = selected.index
+            if 0 <= idx < len(_quick_date_values):
+                date_input = args.inputs.itemById("task_due_date")
+                if date_input:
+                    date_input.value = _quick_date_values[idx]
         return
-
-    today = datetime.now()
-
-    if changed.id == "btn_row_tomorrow":
-        # Next day, rounded up to a business day
-        target = _next_business_day(today + timedelta(days=1))
-
-    elif changed.id == "btn_row_eow":
-        # Friday of the current week; if today is Sat/Sun, jumps to next Friday
-        days_until_friday = (4 - today.weekday()) % 7
-        target = today + timedelta(days=days_until_friday)
-
-    else:  # btn_row_1w
-        # Same day next week, rounded up to a business day if it lands on a weekend
-        target = _next_business_day(today + timedelta(days=7))
-
-    # Write the calculated date back into the due date field
-    date_input = args.inputs.itemById("task_due_date")
-    if date_input:
-        date_input.value = target.strftime("%Y-%m-%d")
 
 
 def command_destroy(args: adsk.core.CommandEventArgs):
@@ -795,13 +768,92 @@ def _load_list_id_for_project(project_urn: str) -> str:
 
 
 def _date_to_unix_ms(date_str: str):
-    """Convert a YYYY-MM-DD string to a Unix timestamp in milliseconds.
+    """Convert a YYYY-MM-DD or YYYY-MM-DD HH:MM string to Unix timestamp in ms.
     Returns None if the string cannot be parsed."""
-    try:
-        dt = datetime.strptime(date_str, "%Y-%m-%d")
-        return int(dt.timestamp() * 1000)
-    except ValueError:
-        return None
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(date_str, fmt)
+            return int(dt.timestamp() * 1000)
+        except ValueError:
+            continue
+    return None
+
+
+def _compute_quick_dates() -> list:
+    """Pre-calculate quick-date options relative to *now*.
+
+    Returns a list of (display_label, date_value) tuples where date_value is
+    either 'YYYY-MM-DD' (date-only) or 'YYYY-MM-DD HH:MM' (for Later).
+    Weekend adjustments are applied where appropriate.
+    """
+    now = datetime.now()
+
+    def _fmt(dt):
+        """'Mon 9 Mar' style — no leading zero on day."""
+        return f"{dt.strftime('%a')} {dt.day} {dt.strftime('%b')}"
+
+    results = []
+
+    # 1. Today
+    results.append((
+        f"Today \u2014 {now.strftime('%a')}",
+        now.strftime("%Y-%m-%d"),
+    ))
+
+    # 2. Later (now + 2 hours) — carries a time component for ClickUp
+    later = now + timedelta(hours=2)
+    hour_12 = int(later.strftime("%I"))  # 12-hour without leading zero
+    ampm = later.strftime("%p").lower()
+    results.append((
+        f"Later \u2014 {hour_12}:{later.strftime('%M')} {ampm}",
+        later.strftime("%Y-%m-%d %H:%M"),
+    ))
+
+    # 3. Tomorrow — next business day
+    tomorrow = _next_business_day(now + timedelta(days=1))
+    results.append((
+        f"Tomorrow \u2014 {tomorrow.strftime('%a')}",
+        tomorrow.strftime("%Y-%m-%d"),
+    ))
+
+    # 4. End of Week — this Friday; if Sat/Sun, next Friday
+    days_to_eow = (4 - now.weekday()) % 7
+    eow = now + timedelta(days=days_to_eow)
+    results.append((
+        f"End of Week \u2014 {_fmt(eow)}",
+        eow.strftime("%Y-%m-%d"),
+    ))
+
+    # 5. Next Week — coming Monday (if today is Mon, goes to next Mon)
+    days_to_monday = ((7 - now.weekday()) % 7) or 7
+    next_mon = now + timedelta(days=days_to_monday)
+    results.append((
+        f"Next Week \u2014 {_fmt(next_mon)}",
+        next_mon.strftime("%Y-%m-%d"),
+    ))
+
+    # 6. Next Friday — always the Friday one week after End-of-Week Friday
+    next_fri = eow + timedelta(days=7)
+    results.append((
+        f"Next Friday \u2014 {_fmt(next_fri)}",
+        next_fri.strftime("%Y-%m-%d"),
+    ))
+
+    # 7. 2 Weeks — today + 14 days, weekend-adjusted
+    two_wk = _next_business_day(now + timedelta(days=14))
+    results.append((
+        f"2 Weeks \u2014 {_fmt(two_wk)}",
+        two_wk.strftime("%Y-%m-%d"),
+    ))
+
+    # 8. 4 Weeks — today + 28 days, weekend-adjusted; shorter 'D Mon' format
+    four_wk = _next_business_day(now + timedelta(days=28))
+    results.append((
+        f"4 Weeks \u2014 {four_wk.day} {four_wk.strftime('%b')}",
+        four_wk.strftime("%Y-%m-%d"),
+    ))
+
+    return results
 
 
 def _build_open_on_desktop_url(doc) -> str:
