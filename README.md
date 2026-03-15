@@ -1,6 +1,6 @@
 # PowerTools – Plus Project
 
-A Fusion 360 add-in that connects your design projects to [ClickUp](https://clickup.com). Map any Fusion project to a ClickUp task list, open that list with a single click, and create new tasks without leaving the design environment.
+A Fusion add-in that connects your design projects to [ClickUp](https://clickup.com). Map any Fusion project to a ClickUp Folder task list, open that list with a single click, and create new tasks without leaving the design environment.
 
 ![PowerTools Plus Project toolbar panel](docs/_assets/toolbar-panel.png)
 
