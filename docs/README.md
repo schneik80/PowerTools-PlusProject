@@ -104,3 +104,7 @@ The add-in stores runtime data in the `cache/` folder at the add-in root. These 
 
 > [!WARNING]
 > `cache/auth.json` contains API tokens stored in plain text. Do not share this file or commit it to a repository.
+
+---
+
+*Copyright © 2026 IMA LLC. All rights reserved.*

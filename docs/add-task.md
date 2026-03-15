@@ -131,3 +131,7 @@ C4Context
 | [Creating the Fusion Design Custom Field](clickup-fusion-design-field.md) | Set up the custom URL field for document linking |
 | [List Tasks](list-tasks.md) | View tasks linked to the active document |
 | [Update Tasks](update-tasks.md) | Edit task name, due date, and priority from within Fusion |
+
+---
+
+*Copyright © 2026 IMA LLC. All rights reserved.*

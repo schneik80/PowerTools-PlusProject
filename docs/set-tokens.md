@@ -119,3 +119,7 @@ C4Context
 | [Map Project to ClickUp](map-project.md) | Link the active Fusion project to a ClickUp list |
 | [Add ClickUp Task](add-task.md) | Create a task that uses the saved ClickUp token |
 | [Creating the Fusion Design Custom Field](clickup-fusion-design-field.md) | Set up document linking in ClickUp |
+
+---
+
+*Copyright © 2026 IMA LLC. All rights reserved.*

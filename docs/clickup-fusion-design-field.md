@@ -104,3 +104,7 @@ C4Context
 - [Add ClickUp Task](add-task.md)
 - [Set ClickUp Tokens](set-tokens.md)
 - [Map Project to ClickUp](map-project.md)
+
+---
+
+*Copyright © 2026 IMA LLC. All rights reserved.*

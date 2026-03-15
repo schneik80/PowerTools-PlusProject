@@ -129,3 +129,19 @@ The add-in stores runtime data locally in `cache/` at the add-in root. These fil
 
 > [!WARNING]
 > `cache/auth.json` contains API tokens stored in plain text. Do not share this file or commit it to a repository.
+
+---
+
+## Support
+
+This add-in is developed and maintained by IMA LLC.
+
+---
+
+## License
+
+This project is released under the [MIT License](LICENSE).
+
+---
+
+*Copyright © 2026 IMA LLC. All rights reserved.*

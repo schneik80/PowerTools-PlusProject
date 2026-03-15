@@ -93,3 +93,7 @@ C4Context
 | [Add ClickUp Task](add-task.md) | Create a new task linked to the active document |
 | [Update Tasks](update-tasks.md) | Edit task name, due date, and priority from within Fusion |
 | [Open ClickUp](open-clickup.md) | Open the mapped ClickUp list in your browser |
+
+---
+
+*Copyright © 2026 IMA LLC. All rights reserved.*

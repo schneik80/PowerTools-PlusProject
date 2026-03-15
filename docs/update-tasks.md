@@ -116,3 +116,7 @@ C4Context
 | [Add ClickUp Task](add-task.md) | Create a new task linked to the active document |
 | [List Tasks](list-tasks.md) | Read-only view of document tasks and the full project list |
 | [Open ClickUp](open-clickup.md) | Open the mapped ClickUp list in your browser |
+
+---
+
+*Copyright © 2026 IMA LLC. All rights reserved.*

@@ -128,3 +128,7 @@ C4Context
 | [Set ClickUp Tokens](set-tokens.md) | Store the API credentials required by all commands |
 | [Open ClickUp](open-clickup.md) | Open the mapped ClickUp list in your browser |
 | [Add ClickUp Task](add-task.md) | Create a new ClickUp task in the mapped list |
+
+---
+
+*Copyright © 2026 IMA LLC. All rights reserved.*

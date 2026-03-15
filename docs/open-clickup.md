@@ -89,3 +89,7 @@ C4Context
 | [Map Project to ClickUp](map-project.md) | Link the active Fusion project to a ClickUp list |
 | [Add ClickUp Task](add-task.md) | Create a new task in the mapped ClickUp list |
 | [List Tasks](list-tasks.md) | View tasks linked to the active document from within Fusion |
+
+---
+
+*Copyright © 2026 IMA LLC. All rights reserved.*
