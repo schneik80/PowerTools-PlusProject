@@ -2,7 +2,7 @@ import adsk.core
 import adsk.fusion
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from urllib.parse import urlencode
 
 from ...lib import fusionAddInUtils as futil
@@ -53,7 +53,7 @@ _list_statuses: list = []  # [{"status": str, "color": str}, ...]
 _list_members: list = []  # [{"id": int, "username": str, "email": str}, ...]
 _selected_task_id: str = ""  # task ID of the currently selected table row
 _pending_edits: dict = {}  # task_id → {desc, time_hours, assignee_name, is_private}
-_quick_date_values: list = []  # parallel list of date values for the Quick Date dropdown
+_quick_date_options: list = []  # pre-calculated (label, value) tuples for the Quick Date dropdown
 
 
 def start():
@@ -312,9 +312,8 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
         "Enter the estimated time in hours (e.g. 1.5). Leave blank to clear."
     )
 
-    global _quick_date_values
-    _quick_date_options = _compute_quick_dates()
-    _quick_date_values = [v for _, v in _quick_date_options]
+    global _quick_date_options
+    _quick_date_options = futil.compute_quick_dates()
     quick_date_ctrl = inputs.addDropDownCommandInput(
         "detail_quick_date",
         "Quick Due Date",
@@ -747,11 +746,11 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
         selected = getattr(changed, "selectedItem", None)
         if selected is not None and _selected_task_id:
             idx = selected.index
-            if 0 <= idx < len(_quick_date_values):
+            if 0 <= idx < len(_quick_date_options):
                 due_input = inputs.itemById(f"due_{_selected_task_id}")
                 if due_input:
                     # Strip any time component so the table cell shows YYYY-MM-DD
-                    due_input.value = _quick_date_values[idx].split(" ")[0]
+                    due_input.value = _quick_date_options[idx][1].split(" ")[0]
         return
 
     # ---- Apply button ----
@@ -926,100 +925,6 @@ def _store_pending_edits(inputs: adsk.core.CommandInputs, tid: str) -> None:
         "is_private": is_private,
     }
     futil.log(f"{CMD_NAME}: Stored pending edits for task '{tid}'.")
-
-
-# ---------------------------------------------------------------------------
-# Quick-date helpers (mirrored from addtask)
-# ---------------------------------------------------------------------------
-
-
-def _next_business_day(dt: datetime) -> datetime:
-    """Return *dt* unchanged if it is a weekday (Mon–Fri).
-    If it falls on Saturday, advance to the following Monday (+2 days).
-    If it falls on Sunday, advance to Monday (+1 day).
-    """
-    weekday = dt.weekday()  # 0 = Monday … 6 = Sunday
-    if weekday == 5:  # Saturday → Monday
-        dt += timedelta(days=2)
-    elif weekday == 6:  # Sunday → Monday
-        dt += timedelta(days=1)
-    return dt
-
-
-def _compute_quick_dates() -> list:
-    """Pre-calculate quick-date options relative to *now*.
-
-    Returns a list of (display_label, date_value) tuples where date_value is
-    either 'YYYY-MM-DD' (date-only) or 'YYYY-MM-DD HH:MM' (for Later).
-    Weekend adjustments are applied where appropriate.
-    """
-    now = datetime.now()
-
-    def _fmt(dt):
-        return f"{dt.strftime('%a')} {dt.day} {dt.strftime('%b')}"
-
-    results = []
-
-    # 1. Today
-    results.append((
-        f"Today \u2014 {now.strftime('%a')}",
-        now.strftime("%Y-%m-%d"),
-    ))
-
-    # 2. Later (now + 2 hours)
-    later = now + timedelta(hours=2)
-    hour_12 = int(later.strftime("%I"))
-    ampm = later.strftime("%p").lower()
-    results.append((
-        f"Later \u2014 {hour_12}:{later.strftime('%M')} {ampm}",
-        later.strftime("%Y-%m-%d %H:%M"),
-    ))
-
-    # 3. Tomorrow — next business day
-    tomorrow = _next_business_day(now + timedelta(days=1))
-    results.append((
-        f"Tomorrow \u2014 {tomorrow.strftime('%a')}",
-        tomorrow.strftime("%Y-%m-%d"),
-    ))
-
-    # 4. End of Week — this Friday; if Sat/Sun, next Friday
-    days_to_eow = (4 - now.weekday()) % 7
-    eow = now + timedelta(days=days_to_eow)
-    results.append((
-        f"End of Week \u2014 {_fmt(eow)}",
-        eow.strftime("%Y-%m-%d"),
-    ))
-
-    # 5. Next Week — coming Monday
-    days_to_monday = ((7 - now.weekday()) % 7) or 7
-    next_mon = now + timedelta(days=days_to_monday)
-    results.append((
-        f"Next Week \u2014 {_fmt(next_mon)}",
-        next_mon.strftime("%Y-%m-%d"),
-    ))
-
-    # 6. Next Friday
-    next_fri = eow + timedelta(days=7)
-    results.append((
-        f"Next Friday \u2014 {_fmt(next_fri)}",
-        next_fri.strftime("%Y-%m-%d"),
-    ))
-
-    # 7. 2 Weeks — today + 14 days, weekend-adjusted
-    two_wk = _next_business_day(now + timedelta(days=14))
-    results.append((
-        f"2 Weeks \u2014 {_fmt(two_wk)}",
-        two_wk.strftime("%Y-%m-%d"),
-    ))
-
-    # 8. 4 Weeks — today + 28 days, weekend-adjusted
-    four_wk = _next_business_day(now + timedelta(days=28))
-    results.append((
-        f"4 Weeks \u2014 {four_wk.day} {four_wk.strftime('%b')}",
-        four_wk.strftime("%Y-%m-%d"),
-    ))
-
-    return results
 
 
 # ---------------------------------------------------------------------------
