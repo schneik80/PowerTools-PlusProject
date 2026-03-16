@@ -100,7 +100,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
         doc = app.activeDocument
         if not doc:
             ui.messageBox(
-                "No active document found. Please open a Fusion 360 document first.",
+                "No active document found. Please open a Fusion document first.",
                 "No Document",
             )
             return

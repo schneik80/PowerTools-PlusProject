@@ -126,7 +126,7 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     data_file = doc.dataFile if doc else None
     if not doc or not data_file:
         ui.messageBox(
-            "Please open a saved Fusion 360 document first.",
+            "Please open a saved Fusion document first.",
             "No Document",
         )
         args.command.isAutoExecute = True
@@ -139,7 +139,7 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     project_urn = project.id if project else None
     if not project_urn:
         ui.messageBox(
-            "Could not determine the current Fusion 360 project.",
+            "Could not determine the current Fusion project.",
             "Project Not Found",
         )
         args.command.isAutoExecute = True

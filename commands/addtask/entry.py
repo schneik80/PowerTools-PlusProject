@@ -35,7 +35,7 @@ ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resource
 # ClickUp API configuration
 # The API token is read from cache/auth.json.
 # The list ID is read per-project from cache/projects.json ("clickup_list_id" key),
-# keyed by the Fusion 360 project URN — the same lookup used by openClickUp and saveURL.
+# keyed by the Fusion project URN — the same lookup used by openClickUp and saveURL.
 CLICKUP_API_BASE = "https://api.clickup.com/api/v2"
 
 # Path to auth credentials in the shared cache folder
@@ -219,7 +219,7 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     )
     link_input.tooltip = "Link Document to Task"
     link_input.tooltipDescription = (
-        "When checked, a shortened Open-on-Desktop link for the active Fusion 360 document "
+        "When checked, a shortened Open-on-Desktop link for the active Fusion document "
         "is attached to the task via the 'Fusion Design' custom field in ClickUp. "
         "Requires a TinyURL API token configured in Set Tokens."
     )
@@ -387,7 +387,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
         if not project_urn:
             futil.log(f"{CMD_NAME}: ERROR — could not determine current project URN.")
             ui.messageBox(
-                "Could not determine the current Fusion 360 project.\n\n"
+                "Could not determine the current Fusion project.\n\n"
                 "Please make sure a saved document is open.",
                 "Project Not Found",
             )
