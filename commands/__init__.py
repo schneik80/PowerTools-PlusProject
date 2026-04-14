@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2022-2026 IMA LLC
+
 from .saveURL import entry as commandDialog
 from .openClickUp import entry as openClickUp
 from .addtask import entry as addTask
