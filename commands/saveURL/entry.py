@@ -98,11 +98,7 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
         return
 
     # Check if the document is saved
-    if not doc.isSaved:
-        ui.messageBox(
-            "The active document must be saved before configuring ClickUp URL. Please save the document first.",
-            "Document Not Saved",
-        )
+    if not futil.isSaved():
         return
 
     # Get the data file and project information
@@ -236,9 +232,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
         futil.log(f"{action} ClickUp URL for project URN: {project_urn}")
 
     except Exception as e:
-        error_msg = f"Error saving ClickUp URL: {str(e)}"
-        ui.messageBox(error_msg, "Error")
-        futil.log(error_msg)
+        futil.handle_error(f"{CMD_NAME}: command_execute", show_message_box=True)
 
 
 # This event handler is called when the user interacts with any of the inputs in the dialog

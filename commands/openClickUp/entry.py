@@ -175,8 +175,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
             )
 
     except Exception as e:
-        futil.log(f"Error in {CMD_NAME}: {str(e)}")
-        ui.messageBox(f"An error occurred: {str(e)}", "Error")
+        futil.handle_error(CMD_NAME, show_message_box=True)
 
 
 def command_destroy(args: adsk.core.CommandEventArgs):

@@ -135,9 +135,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
         ui.messageBox("API tokens saved.", CMD_NAME)
 
     except Exception as e:
-        msg = f"Error saving tokens: {e}"
-        futil.log(f"{CMD_NAME}: {msg}")
-        ui.messageBox(msg, "Error")
+        futil.handle_error(f"{CMD_NAME}: save tokens", show_message_box=True)
 
 
 def command_destroy(args: adsk.core.CommandEventArgs):
