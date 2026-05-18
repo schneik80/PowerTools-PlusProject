@@ -581,8 +581,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
             )
 
     except Exception as e:
-        futil.log(f"{CMD_NAME}: EXCEPTION in command_execute — {e}")
-        ui.messageBox(f"An unexpected error occurred:\n\n{e}", "Error")
+        futil.handle_error(f"{CMD_NAME}: command_execute", show_message_box=True)
 
 
 def command_validate_input(args: adsk.core.ValidateInputsEventArgs):
