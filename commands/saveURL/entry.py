@@ -40,43 +40,14 @@ def start():
     futil.add_handler(cmd_def.commandCreated, command_created)
 
     # ******** Add a button into the UI so the user can run the command. ********
-    # Get the QAT toolbar.
-    qat = ui.toolbars.itemById("QAT")
-
-    # Get the drop-down that contains the file related commands.
-    file_dropdown = adsk.core.DropDownControl.cast(qat.controls.itemById("FileSubMenuCommand"))
-
-    # Get or create the shared PowerTools Settings flyout.
-    # Other PowerTools add-ins may have already added this flyout.
-    pt_settings_control = file_dropdown.controls.itemById(PT_SETTINGS_ID)
-    if not pt_settings_control:
-        pt_settings = file_dropdown.controls.addDropDown(
-            PT_SETTINGS_NAME, "", PT_SETTINGS_ID
-        )
-    else:
-        pt_settings = adsk.core.DropDownControl.cast(pt_settings_control)
-
-    # Add the command into the flyout.
-    pt_settings.controls.addCommand(cmd_def)
+    flyout = futil.get_or_create_qat_file_flyout(PT_SETTINGS_ID, PT_SETTINGS_NAME)
+    if flyout:
+        flyout.controls.addCommand(cmd_def)
 
 
 # Executed when add-in is stopped.
 def stop():
-    # Get the various UI elements for this command
-    qat = ui.toolbars.itemById("QAT")
-    file_dropdown = adsk.core.DropDownControl.cast(qat.controls.itemById("FileSubMenuCommand"))
-    pt_settings = adsk.core.DropDownControl.cast(file_dropdown.controls.itemById(PT_SETTINGS_ID))
-
-    if pt_settings:
-        command_control = pt_settings.controls.itemById(CMD_ID)
-        if command_control:
-            command_control.deleteMe()
-
-        # Only remove the flyout if no other add-in's commands remain.
-        if pt_settings.controls.count == 0:
-            pt_settings.deleteMe()
-
-    # Delete the command definition
+    futil.remove_from_qat_file_flyout(CMD_ID, PT_SETTINGS_ID)
     command_definition = ui.commandDefinitions.itemById(CMD_ID)
     if command_definition:
         command_definition.deleteMe()

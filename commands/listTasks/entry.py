@@ -62,32 +62,15 @@ def start():
     )
     futil.add_handler(cmd_def.commandCreated, command_created)
 
-    workspace = ui.workspaces.itemById(WORKSPACE_ID)
-
-    tab = workspace.toolbarTabs.itemById(TAB_ID)
-    if not tab:
-        tab = workspace.toolbarTabs.add(TAB_ID, TAB_NAME)
-
-    panel = tab.toolbarPanels.itemById(PANEL_ID)
-    if not panel:
-        panel = tab.toolbarPanels.add(PANEL_ID, PANEL_NAME, PANEL_AFTER, False)
-
-    control = panel.controls.addCommand(cmd_def, "", False)
-    control.isPromoted = IS_PROMOTED
+    panel = futil.get_or_create_panel(WORKSPACE_ID, TAB_ID, TAB_NAME, PANEL_ID, PANEL_NAME, PANEL_AFTER)
+    if panel:
+        control = panel.controls.addCommand(cmd_def, "", False)
+        control.isPromoted = IS_PROMOTED
 
 
 def stop():
     """Executed when add-in is stopped."""
-    workspace = ui.workspaces.itemById(WORKSPACE_ID)
-    if workspace:
-        tab = workspace.toolbarTabs.itemById(TAB_ID)
-        if tab:
-            panel = tab.toolbarPanels.itemById(PANEL_ID)
-            if panel:
-                command_control = panel.controls.itemById(CMD_ID)
-                if command_control:
-                    command_control.deleteMe()
-
+    futil.remove_from_panel(WORKSPACE_ID, PANEL_ID, TAB_ID, CMD_ID)
     command_definition = ui.commandDefinitions.itemById(CMD_ID)
     if command_definition:
         command_definition.deleteMe()
