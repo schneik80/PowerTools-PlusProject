@@ -2,7 +2,7 @@
 
 Links the active Autodesk Fusion project to a specific ClickUp list. You must complete this mapping before you can use the **Open ClickUp**, **Add ClickUp Task**, **List Tasks**, or **Update Tasks** commands for a given project.
 
-**Location:** Quick Access Toolbar (QAT) › PowerTools Settings › Map Project to ClickUp
+**Location:** Quick Access Toolbar (QAT) › Plus Project Settings › Map Project to ClickUp
 
 ![Map Project dialog](_assets/map-project-dialog.png)
 
@@ -55,7 +55,7 @@ https://app.clickup.com/XXXXXXXXXXX/v/l/li/1234567891011
 ## How to use Map Project to ClickUp
 
 1. Open any saved document that belongs to the project you want to map.
-2. Select **QAT › PowerTools Settings › Map Project to ClickUp**.
+2. Select **QAT › Plus Project Settings › Map Project to ClickUp**.
 3. Verify that the **Project Name** and **Project URN** fields are populated correctly.
 4. Enter the **ClickUp URL** for the list you want to link.
 5. Enter the **ClickUp List ID**.

@@ -2,7 +2,7 @@
 
 Stores your ClickUp and TinyURL API credentials in the local add-in cache. You must run this command once before any other PowerTools Plus Project command can function.
 
-**Location:** Quick Access Toolbar (QAT) › PowerTools Settings › Set ClickUp Tokens
+**Location:** Quick Access Toolbar (QAT) › Plus Project Settings › Set ClickUp Tokens
 
 ![Set ClickUp Tokens dialog](_assets/set-tokens-dialog.png)
 

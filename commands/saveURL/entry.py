@@ -17,10 +17,6 @@ CMD_ID = f"{config.COMPANY_NAME}_{config.ADDIN_NAME}_saveClickUpURL"
 CMD_NAME = "Map Project to ClickUp"
 CMD_Description = "Map the current Fusion project to a ClickUp list"
 
-# QAT flyout (shared across PowerTools add-ins — create only if absent).
-PT_SETTINGS_ID = "PTSettings"
-PT_SETTINGS_NAME = "PowerTools Settings"
-
 # Resource location for command icons, here we assume a sub folder in this directory named "resources".
 ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "")
 
@@ -40,14 +36,16 @@ def start():
     futil.add_handler(cmd_def.commandCreated, command_created)
 
     # ******** Add a button into the UI so the user can run the command. ********
-    flyout = futil.get_or_create_qat_file_flyout(PT_SETTINGS_ID, PT_SETTINGS_NAME)
+    flyout = futil.get_or_create_qat_file_flyout(
+        config.settings_flyout_id, config.settings_flyout_name
+    )
     if flyout:
         flyout.controls.addCommand(cmd_def)
 
 
 # Executed when add-in is stopped.
 def stop():
-    futil.remove_from_qat_file_flyout(CMD_ID, PT_SETTINGS_ID)
+    futil.remove_from_qat_file_flyout(CMD_ID, config.settings_flyout_id)
     command_definition = ui.commandDefinitions.itemById(CMD_ID)
     if command_definition:
         command_definition.deleteMe()

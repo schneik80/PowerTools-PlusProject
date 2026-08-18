@@ -10,8 +10,8 @@ PowerTools Plus Project is an Autodesk Fusion add-in that connects your design p
 
 | Command | Location | Purpose |
 |---|---|---|
-| [Set ClickUp Tokens](docs/set-tokens.md) | QAT › PowerTools Settings | Store your ClickUp and TinyURL API credentials |
-| [Map Project to ClickUp](docs/map-project.md) | QAT › PowerTools Settings | Link the active Fusion project to a ClickUp list |
+| [Set ClickUp Tokens](docs/set-tokens.md) | QAT › Plus Project Settings | Store your ClickUp and TinyURL API credentials |
+| [Map Project to ClickUp](docs/map-project.md) | QAT › Plus Project Settings | Link the active Fusion project to a ClickUp list |
 | [Open ClickUp](docs/open-clickup.md) | Design workspace › PowerTools panel | Open the mapped ClickUp list in your browser |
 | [Add ClickUp Task](docs/add-task.md) | Design workspace › PowerTools panel | Create a new ClickUp task from within Fusion |
 | [List Tasks](docs/list-tasks.md) | Design workspace › PowerTools panel | View tasks linked to the active document and the full project list |
@@ -26,7 +26,7 @@ PowerTools Plus Project is an Autodesk Fusion add-in that connects your design p
 3. Select the **Add-Ins** tab, then select the **+** icon and browse to the repository folder.
 4. Select **PowerTools-PlusProject** and select **Run**.
 
-The add-in loads the **PowerTools** panel into the Design workspace toolbar and adds a **PowerTools Settings** flyout to the Quick Access Toolbar (QAT).
+The add-in loads the **PowerTools** panel into the Design workspace toolbar and adds a **Plus Project Settings** flyout to the Quick Access Toolbar (QAT).
 
 ---
 
@@ -36,7 +36,7 @@ Complete these two steps before using the toolbar commands.
 
 ### 1. Set API tokens
 
-Run **Set ClickUp Tokens** from **QAT › PowerTools Settings** and enter your credentials:
+Run **Set ClickUp Tokens** from **QAT › Plus Project Settings** and enter your credentials:
 
 - **ClickUp API Token** — Required for all commands that read or write ClickUp tasks. See [Getting Started with the ClickUp API](https://help.clickup.com/hc/en-us/articles/6303426241687-Getting-Started-with-the-ClickUp-API).
 - **TinyURL API Token** — Required only when you use the **Link Document to Task** option in **Add ClickUp Task**. See [TinyURL Developer API](https://tinyurl.com/app/dev).
@@ -46,7 +46,7 @@ Run **Set ClickUp Tokens** from **QAT › PowerTools Settings** and enter your c
 For each Fusion project you want to connect to ClickUp:
 
 1. Open any saved document that belongs to the project.
-2. Run **Map Project to ClickUp** from **QAT › PowerTools Settings**.
+2. Run **Map Project to ClickUp** from **QAT › Plus Project Settings**.
 3. Enter the ClickUp list URL and List ID for that project.
 
 Repeat this step for each Fusion project you want to connect.

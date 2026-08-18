@@ -10,8 +10,8 @@ PowerTools Plus Project is an Autodesk Fusion add-in that connects your design p
 
 | Command | Location | Purpose |
 |---|---|---|
-| [Set ClickUp Tokens](set-tokens.md) | QAT › PowerTools Settings | Store your ClickUp and TinyURL API credentials |
-| [Map Project to ClickUp](map-project.md) | QAT › PowerTools Settings | Link the active Fusion project to a ClickUp list |
+| [Set ClickUp Tokens](set-tokens.md) | QAT › Plus Project Settings | Store your ClickUp and TinyURL API credentials |
+| [Map Project to ClickUp](map-project.md) | QAT › Plus Project Settings | Link the active Fusion project to a ClickUp list |
 | [Open ClickUp](open-clickup.md) | Design workspace › PowerTools panel | Open the mapped ClickUp list in your browser |
 | [Add ClickUp Task](add-task.md) | Design workspace › PowerTools panel | Create a new ClickUp task from within Fusion |
 | [List Tasks](list-tasks.md) | Design workspace › PowerTools panel | View tasks linked to the active document and the full project list |
@@ -25,7 +25,7 @@ Complete these two steps once before using the toolbar commands.
 
 ### 1. Set API tokens
 
-Run **Set ClickUp Tokens** from **QAT › PowerTools Settings** and enter your credentials:
+Run **Set ClickUp Tokens** from **QAT › Plus Project Settings** and enter your credentials:
 
 - **ClickUp API Token** — Required for all commands that read or write ClickUp tasks. See [Getting Started with the ClickUp API](https://help.clickup.com/hc/en-us/articles/6303426241687-Getting-Started-with-the-ClickUp-API).
 - **TinyURL API Token** — Required only when you use the **Link Document to Task** option in **Add ClickUp Task**. See [TinyURL Developer API](https://tinyurl.com/app/dev).
@@ -37,7 +37,7 @@ Tokens are saved locally to `cache/auth.json` inside the add-in folder.
 For each Fusion project you want to connect to ClickUp:
 
 1. Open any saved document that belongs to the project.
-2. Run **Map Project to ClickUp** from **QAT › PowerTools Settings**.
+2. Run **Map Project to ClickUp** from **QAT › Plus Project Settings**.
 3. Enter the ClickUp list URL and List ID for that project.
 
 Project mappings are saved locally to `cache/projects.json`.

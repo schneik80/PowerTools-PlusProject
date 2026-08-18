@@ -15,10 +15,6 @@ CMD_ID = f"{config.COMPANY_NAME}_{config.ADDIN_NAME}_setClickUpTokens"
 CMD_NAME = "Set ClickUp Tokens"
 CMD_Description = "Set the ClickUp and TinyURL API tokens used by Power Tools"
 
-# QAT flyout (shared across PowerTools add-ins — create only if absent).
-PT_SETTINGS_ID = "PTSettings"
-PT_SETTINGS_NAME = "PowerTools Settings"
-
 ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "")
 
 local_handlers = []
@@ -30,13 +26,15 @@ def start():
     )
     futil.add_handler(cmd_def.commandCreated, command_created)
 
-    flyout = futil.get_or_create_qat_file_flyout(PT_SETTINGS_ID, PT_SETTINGS_NAME)
+    flyout = futil.get_or_create_qat_file_flyout(
+        config.settings_flyout_id, config.settings_flyout_name
+    )
     if flyout:
         flyout.controls.addCommand(cmd_def)
 
 
 def stop():
-    futil.remove_from_qat_file_flyout(CMD_ID, PT_SETTINGS_ID)
+    futil.remove_from_qat_file_flyout(CMD_ID, config.settings_flyout_id)
     command_definition = ui.commandDefinitions.itemById(CMD_ID)
     if command_definition:
         command_definition.deleteMe()

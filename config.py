@@ -24,6 +24,11 @@ clickup_panel_id = "PT_ClickUp"
 clickup_panel_name = "ClickUp"
 clickup_panel_after = ""
 
+# Dedicated flyout inside the QAT File dropdown. Owned solely by this add-in,
+# so the label below is always the one the user sees.
+settings_flyout_id = "PlusProjectSettings"
+settings_flyout_name = "Plus Project Settings"
+
 # Cache folder (holds projects.json, auth.json, etc.)
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 
